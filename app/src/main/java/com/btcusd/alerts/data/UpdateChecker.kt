@@ -36,6 +36,9 @@ object UpdateChecker {
         return Triple(nums[0], nums[1], nums[2])
     }
 
+    private fun cmp(a: Triple<Int, Int, Int>, b: Triple<Int, Int, Int>): Int =
+        compareValuesBy(a, b, { it.first }, { it.second }, { it.third })
+
     /** Lists releases, picks the highest vX.Y.Z tag (ignores rolling/dev tags), compares. */
     suspend fun check(): Update? = withContext(Dispatchers.IO) {
         runCatching {
@@ -49,12 +52,12 @@ object UpdateChecker {
                     val r = arr.getJSONObject(i)
                     if (r.optBoolean("draft", false) || r.optBoolean("prerelease", false)) continue
                     val v = semver(r.optString("tag_name", "")) ?: continue
-                    if (bestVer == null || v > bestVer!!) { bestVer = v; best = r }
+                    if (bestVer == null || cmp(v, bestVer!!) > 0) { bestVer = v; best = r }
                 }
                 val rel = best ?: return@withContext null
                 val tag = rel.getString("tag_name")
                 val cur = semver(com.btcusd.alerts.BuildConfig.VERSION_NAME) ?: return@withContext null
-                if (bestVer!! <= cur) return@withContext null
+                if (cmp(bestVer!!, cur) <= 0) return@withContext null
                 val assets = rel.getJSONArray("assets")
                 for (i in 0 until assets.length()) {
                     val a = assets.getJSONObject(i)
