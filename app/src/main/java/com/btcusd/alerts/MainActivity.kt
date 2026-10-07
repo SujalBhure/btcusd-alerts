@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -70,23 +71,31 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var db: AlertDb
+    var resumeTick by androidx.compose.runtime.mutableStateOf(0)
+        private set
+
+    override fun onResume() {
+        super.onResume()
+        resumeTick++
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db").build()
+        db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
+            .addMigrations(com.btcusd.alerts.data.MIGRATION_1_2).build()
         PriceMonitorService.ensureAlertChannel(this)
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         val svc = Intent(this, PriceMonitorService::class.java)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
-        setContent { AppTheme { Home(db) } }
+        setContent { AppTheme { Home(db, resumeTick) } }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Home(db: AlertDb) {
+private fun Home(db: AlertDb, resumeTick: Int) {
     val scope = rememberCoroutineScope()
     val alerts by db.dao().observe().collectAsState(initial = emptyList())
     val ctx = LocalContext.current
@@ -98,8 +107,11 @@ private fun Home(db: AlertDb) {
     var soundLabel by remember { mutableStateOf(SoundSettings.label(ctx)) }
     var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
     var downloading by remember { mutableStateOf(false) }
-    var showBattery by remember { mutableStateOf(false) }
     var showAuto by remember { mutableStateOf(false) }
+    var showPerms by remember { mutableStateOf(false) }
+    var askedPerms by remember { mutableStateOf(false) }
+
+    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -111,9 +123,16 @@ private fun Home(db: AlertDb) {
         }
     }
 
+    LaunchedEffect(resumeTick) {
+        if (!askedPerms) {
+            askedPerms = true
+            if (missingPerms(ctx).isNotEmpty()) showPerms = true
+        }
+        if (showPerms && missingPerms(ctx).isEmpty()) showPerms = false
+    }
+
     LaunchedEffect(Unit) {
-        val pm = ctx.getSystemService(android.os.PowerManager::class.java)
-        if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) showBattery = true
+        scope.launch(Dispatchers.IO) { runCatching { db.dao().cleanupFiredOnce() } }
         if (!UpdateChecker.snoozed(ctx)) update = UpdateChecker.check()
         candles = BybitApi.fetchKlines("15", 96)
         BybitApi.fetchTicker()?.let { price = it.lastPrice; pct = it.price24hPcnt * 100 }
@@ -154,7 +173,10 @@ private fun Home(db: AlertDb) {
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Alerts (${alerts.size})", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { showPerms = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "Permissions", tint = Color.White)
+                    }
                     Button(
                         onClick = { showSound = true },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
@@ -184,9 +206,10 @@ private fun Home(db: AlertDb) {
             ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = Color(0xFF14181D)) {
                 AddAlertSheet(
                     current = price,
-                    onSave = { target ->
+                    universalLabel = soundLabel,
+                    onSave = { target, tone, onceMode ->
                         scope.launch(Dispatchers.IO) {
-                            db.dao().insert(Alert(targetPrice = target, direction = "cross"))
+                            db.dao().insert(Alert(targetPrice = target, direction = "cross", oneShot = onceMode, ringtoneUri = tone))
                             withContext(Dispatchers.Main) { showSheet = false }
                         }
                     }
@@ -245,26 +268,39 @@ private fun Home(db: AlertDb) {
                 }
             )
         }
-        if (showBattery) {
-            AlertDialog(
-                onDismissRequest = { showBattery = false },
-                title = { Text("Keep alerts ringing in background") },
-                text = { Text("Android kills background apps to save battery. Allow BTC Alerts to run unrestricted, or alerts will only fire while the app is open.") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showBattery = false
+        if (showPerms) {
+            ModalBottomSheet(onDismissRequest = { showPerms = false }, containerColor = Color(0xFF14181D)) {
+                PermSheet(
+                    missing = missingPerms(ctx),
+                    onGrantNotifications = {
+                        if (Build.VERSION.SDK_INT >= 33) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    },
+                    onGrantOverlay = {
+                        runCatching {
+                            ctx.startActivity(android.content.Intent(
+                                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                android.net.Uri.parse("package:${ctx.packageName}")
+                            ))
+                        }
+                    },
+                    onGrantBattery = {
                         runCatching {
                             ctx.startActivity(android.content.Intent(
                                 android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                                 android.net.Uri.parse("package:${ctx.packageName}")
                             ))
                         }
-                    }) { Text("Allow background") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showBattery = false; showAuto = true }) { Text("Autostart help") }
-                }
-            )
+                    },
+                    onGrantFullscreen = {
+                        runCatching {
+                            ctx.startActivity(android.content.Intent(
+                                android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                            ).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+                        }
+                    },
+                    onAutostart = { showPerms = false; showAuto = true }
+                )
+            }
         }
         if (showAuto) {
             AlertDialog(
@@ -291,7 +327,8 @@ private fun AlertRow(a: Alert, distance: Double, onToggle: () -> Unit, onDelete:
                 color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium
             )
             Text(
-                if (!a.active) "off" else "$${"%,.1f".format(kotlin.math.abs(distance))} away",
+                if (!a.active) "off"
+                else "$${"%,.1f".format(kotlin.math.abs(distance))} away • ${if (a.oneShot) "once" else "every time"}${if (a.ringtoneUri != null) " • ♪" else ""}",
                 color = Color(0xFF9E9E9E), fontSize = 13.sp
             )
         }
@@ -306,8 +343,21 @@ private fun AlertRow(a: Alert, distance: Double, onToggle: () -> Unit, onDelete:
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddAlertSheet(current: Double, onSave: (Double) -> Unit) {
+private fun AddAlertSheet(current: Double, universalLabel: String, onSave: (Double, String?, Boolean) -> Unit) {
+    val ctx = LocalContext.current
     var text by remember { mutableStateOf(if (current > 0) "${current.toInt()}" else "") }
+    var once by remember { mutableStateOf(true) }
+    var toneUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var toneName by remember { mutableStateOf("Universal ($universalLabel)") }
+    val pickTone = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            toneUri = uri
+            toneName = uri.lastPathSegment?.take(28) ?: "Custom sound"
+        }
+    }
     Column(Modifier.fillMaxWidth().padding(20.dp)) {
         Text("New BTCUSD alert", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(12.dp))
@@ -317,15 +367,117 @@ private fun AddAlertSheet(current: Double, onSave: (Double) -> Unit) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth()
         )
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Once" to true, "Every time" to false).forEach { (label, v) ->
+                Button(
+                    onClick = { once = v },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = if (once == v) ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
+                    else ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
+                ) { Text(label, fontSize = 13.sp) }
+            }
+        }
+        Text(
+            if (once) "Rings once, auto-deletes on dismiss." else "Rings on every crossing until you delete it.",
+            color = Color(0xFF9E9E9E), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Sound: $toneName", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Button(
+                onClick = { pickTone.launch("audio/*") },
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
+            ) { Text("Choose", fontSize = 13.sp) }
+        }
+        if (toneUri != null) {
+            TextButton(onClick = { toneUri = null; toneName = "Universal ($universalLabel)" }) {
+                Text("Use universal instead", fontSize = 13.sp)
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Text("Fires when Bybit BTCUSD perp lastPrice crosses your level, either way.", color = Color(0xFF9E9E9E), fontSize = 13.sp)
         Spacer(Modifier.height(16.dp))
         Button(
-            onClick = { text.toDoubleOrNull()?.let { onSave(it) } },
+            onClick = { text.toDoubleOrNull()?.let { onSave(it, toneUri?.toString(), once) } },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
         ) { Text("Save alert", fontWeight = FontWeight.Medium) }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Keys of permissions currently missing. Empty = all good. */
+private fun missingPerms(ctx: android.content.Context): List<String> {
+    val out = mutableListOf<String>()
+    val nm = ctx.getSystemService(android.app.NotificationManager::class.java)
+    if (nm != null && !nm.areNotificationsEnabled()) out += "notifications"
+    if (!android.provider.Settings.canDrawOverlays(ctx)) out += "overlay"
+    val pm = ctx.getSystemService(android.os.PowerManager::class.java)
+    if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) out += "battery"
+    if (android.os.Build.VERSION.SDK_INT >= 34 && nm != null && !nm.canUseFullScreenIntent()) out += "fullscreen"
+    return out
+}
+
+@Composable
+private fun PermSheet(
+    missing: List<String>,
+    onGrantNotifications: () -> Unit,
+    onGrantOverlay: () -> Unit,
+    onGrantBattery: () -> Unit,
+    onGrantFullscreen: () -> Unit,
+    onAutostart: () -> Unit
+) {
+    Column(Modifier.fillMaxWidth().padding(20.dp)) {
+        Text("Permissions", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Alerts can only wake you if Android lets the app run. Grant everything below.",
+            color = Color(0xFF9E9E9E), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        PermRow("Notifications", "Show alert banners on lock screen.", missing.contains("notifications"), onGrantNotifications)
+        PermRow("Display over other apps", "Pop the call-style alarm over anything.", missing.contains("overlay"), onGrantOverlay)
+        PermRow("Ignore battery optimization", "Keep watching price with screen off.", missing.contains("battery"), onGrantBattery)
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            PermRow("Full-screen alerts", "Android 14+ toggle for lock-screen alarms.", missing.contains("fullscreen"), onGrantFullscreen)
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = onAutostart,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
+        ) { Text("Autostart help (vivo / Xiaomi / Samsung)", fontSize = 13.sp) }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun PermRow(title: String, desc: String, needed: Boolean, onGrant: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    if (needed) "NEEDED" else "OK",
+                    color = if (needed) Color(0xFFF7A600) else Color(0xFF0ECB81), fontSize = 12.sp
+                )
+            }
+            Text(desc, color = Color(0xFF9E9E9E), fontSize = 13.sp)
+        }
+        if (needed) {
+            Button(
+                onClick = onGrant,
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
+            ) { Text("Grant", fontSize = 13.sp) }
+        }
     }
 }

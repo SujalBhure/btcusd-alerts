@@ -44,12 +44,17 @@ class AlarmActivity : ComponentActivity() {
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
         )
-        RingtonePlayer.start(this)
-
+        val alertId = intent.getLongExtra("alertId", 0L)
+        val oneShot = intent.getBooleanExtra("oneShot", true)
         val target = intent.getDoubleExtra("target", 0.0)
         val price = intent.getDoubleExtra("price", 0.0)
+        val ringtoneStr = intent.getStringExtra("ringtone")
         val isTest = intent.getBooleanExtra("test", false)
         val up = price >= target
+        RingtonePlayer.start(
+            this,
+            if (isTest) null else ringtoneStr?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
+        )
 
         setContent {
             AppTheme {
@@ -73,7 +78,20 @@ class AlarmActivity : ComponentActivity() {
                     Spacer(Modifier.height(32.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
-                            onClick = { RingtonePlayer.stop(); finish() },
+                            onClick = {
+                                RingtonePlayer.stop()
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    // Once-alerts auto-delete on dismiss; everytime-alerts stay.
+                                    runCatching {
+                                        val db = Room.databaseBuilder(
+                                            this@AlarmActivity, AlertDb::class.java, "alerts.db"
+                                        ).addMigrations(com.btcusd.alerts.data.MIGRATION_1_2).build()
+                                        if (!isTest && oneShot && alertId != 0L) db.dao().deleteById(alertId)
+                                        db.close()
+                                    }
+                                }
+                                finish()
+                            },
                             modifier = Modifier.weight(1f).height(52.dp),
                             shape = RoundedCornerShape(26.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
@@ -82,13 +100,13 @@ class AlarmActivity : ComponentActivity() {
                             onClick = {
                                 RingtonePlayer.stop()
                                 CoroutineScope(Dispatchers.IO).launch {
-                                    // Snooze most recent matching alert 5m (best-effort).
                                     runCatching {
                                         val db = Room.databaseBuilder(
                                             this@AlarmActivity, AlertDb::class.java, "alerts.db"
-                                        ).build()
-                                        db.dao().active().firstOrNull { it.targetPrice == target }
-                                            ?.let { db.dao().snooze(it.id, System.currentTimeMillis() + 5 * 60_000) }
+                                        ).addMigrations(com.btcusd.alerts.data.MIGRATION_1_2).build()
+                                        if (!isTest && alertId != 0L) {
+                                            db.dao().snooze(alertId, System.currentTimeMillis() + 5 * 60_000)
+                                        }
                                         db.close()
                                     }
                                 }

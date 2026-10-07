@@ -15,17 +15,19 @@ object RingtonePlayer {
     private var player: MediaPlayer? = null
     private var vibrator: Vibrator? = null
 
-    fun start(ctx: Context) {
+    /** Plays alertRingtone (per-alert) else universal else system alarm, looping + vibration. */
+    fun start(ctx: Context, alertRingtone: android.net.Uri? = null) {
         stop()
         val am = ctx.getSystemService(AudioManager::class.java)
         am.setStreamVolume(AudioManager.STREAM_ALARM, am.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0)
-        val custom = SoundSettings.getCustomUri(ctx)?.let {
+        fun usable(u: android.net.Uri?): android.net.Uri? = u?.let {
             runCatching {
                 ctx.contentResolver.openInputStream(it)?.close()
                 it
             }.getOrNull()
         }
-        val uri = custom
+        val uri = usable(alertRingtone)
+            ?: usable(SoundSettings.getCustomUri(ctx))
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
         player = MediaPlayer().apply {

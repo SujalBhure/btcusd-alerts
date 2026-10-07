@@ -40,7 +40,8 @@ class PriceMonitorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         ensureAlertChannel(this)
-        db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db").build()
+        db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
+            .addMigrations(MIGRATION_1_2).build()
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTCAlerts:monitor")
             .apply { runCatching { acquire() } }
@@ -104,25 +105,29 @@ class PriceMonitorService : LifecycleService() {
             val crossed = d1 != 0.0 && (d1 < 0 != d2 < 0 || d2 == 0.0)
             if (crossed) {
                 db.dao().markFired(a.id, now)
-                fireAlarm(a.targetPrice, price)
+                fireAlarm(a, price)
             }
         }
     }
 
-    private fun fireAlarm(target: Double, price: Double) {
+    private fun fireAlarm(a: Alert, price: Double) {
         ensureAlertChannel(this)
+        val target = a.targetPrice
         val full = Intent(this, AlarmActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra("alertId", a.id)
+            putExtra("oneShot", a.oneShot)
             putExtra("target", target)
             putExtra("price", price)
+            putExtra("ringtone", a.ringtoneUri)
         }
         val pi = PendingIntent.getActivity(
             this, target.hashCode(), full,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val sound = SoundSettings.getCustomUri(this)?.toString()?.let {
-            runCatching { android.net.Uri.parse(it) }.getOrNull()
-        } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        val sound = a.ringtoneUri?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
+            ?: SoundSettings.getCustomUri(this)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val notif = NotificationCompat.Builder(this, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("BTCUSD crossed $${"%,.1f".format(target)}")
