@@ -19,7 +19,14 @@ object RingtonePlayer {
         stop()
         val am = ctx.getSystemService(AudioManager::class.java)
         am.setStreamVolume(AudioManager.STREAM_ALARM, am.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0)
-        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        val custom = SoundSettings.getCustomUri(ctx)?.let {
+            runCatching {
+                ctx.contentResolver.openInputStream(it)?.close()
+                it
+            }.getOrNull()
+        }
+        val uri = custom
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
         player = MediaPlayer().apply {
             setAudioAttributes(

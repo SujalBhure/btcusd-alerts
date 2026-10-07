@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Amber candlestick: wick + body, exact rects on dark ground -->
+    <rect android:fillColor="#F7A600" android:left="52" android:top="22" android:right="56" android:bottom="86" />
+    <rect android:fillColor="#F7A600" android:left="42" android:top="38" android:right="66" android:bottom="70" />
+    <!-- Green/red ticks: up left, down right -->
+    <rect android:fillColor="#0ECB81" android:left="24" android:top="52" android:right="27" android:bottom="76" />
+    <rect android:fillColor="#0ECB81" android:left="18" android:top="58" android:right="33" android:bottom="70" />
+    <rect android:fillColor="#F6465D" android:left="81" android:top="34" android:right="84" android:bottom="58" />
+    <rect android:fillColor="#F6465D" android:left="75" android:top="40" android:right="90" android:bottom="52" />
+</vector>

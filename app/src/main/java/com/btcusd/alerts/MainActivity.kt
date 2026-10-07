@@ -5,7 +5,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,10 +24,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.TextButtonimport androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -54,10 +57,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.room.Room
 import com.btcusd.alerts.alarm.AlarmActivity
+import com.btcusd.alerts.alarm.SoundSettings
 import com.btcusd.alerts.data.Alert
 import com.btcusd.alerts.data.AlertDb
 import com.btcusd.alerts.data.BybitApi
 import com.btcusd.alerts.data.PriceMonitorService
+import com.btcusd.alerts.data.UpdateChecker
 import com.btcusd.alerts.ui.AppTheme
 import com.btcusd.alerts.ui.CandleChart
 import kotlinx.coroutines.Dispatchers
@@ -90,9 +95,24 @@ private fun Home(db: AlertDb) {
     var pct by remember { mutableStateOf(0.0) }
     var candles by remember { mutableStateOf(listOf<BybitApi.Candle>()) }
     var showSheet by remember { mutableStateOf(false) }
+    var showSound by remember { mutableStateOf(false) }
+    var soundLabel by remember { mutableStateOf(SoundSettings.label(ctx)) }
+    var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
+    var downloading by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
 
+    val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            SoundSettings.setCustomUri(ctx, uri)
+            soundLabel = SoundSettings.label(ctx)
+        }
+    }
+
     LaunchedEffect(Unit) {
+        if (!UpdateChecker.snoozed(ctx)) update = UpdateChecker.check()
         candles = BybitApi.fetchKlines("15", 96)
         BybitApi.fetchTicker()?.let { price = it.lastPrice; pct = it.price24hPcnt * 100 }
         while (true) {
@@ -132,13 +152,20 @@ private fun Home(db: AlertDb) {
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Alerts (${alerts.size})", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                Button(
-                    onClick = {
-                        ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E)),
-                    shape = RoundedCornerShape(20.dp)
-                ) { Text("Test ring", fontSize = 13.sp) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showSound = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E)),
+                        shape = RoundedCornerShape(20.dp)
+                    ) { Text("Sound", fontSize = 13.sp) }
+                    Button(
+                        onClick = {
+                            ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E)),
+                        shape = RoundedCornerShape(20.dp)
+                    ) { Text("Test ring", fontSize = 13.sp) }
+                }
             }
             Spacer(Modifier.height(8.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -163,6 +190,58 @@ private fun Home(db: AlertDb) {
                     }
                 )
             }
+        }
+        if (showSound) {
+            ModalBottomSheet(onDismissRequest = { showSound = false }, containerColor = Color(0xFF14181D)) {
+                Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                    Text("Alert sound", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Current: $soundLabel", color = Color(0xFF9E9E9E), fontSize = 13.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { pickAudio.launch("audio/*") },
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(26.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
+                    ) { Text("Choose custom ringtone", fontWeight = FontWeight.Medium) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                SoundSettings.setCustomUri(ctx, null)
+                                soundLabel = SoundSettings.label(ctx)
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E))
+                        ) { Text("Default", fontSize = 13.sp) }
+                        Button(
+                            onClick = {
+                                ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E))
+                        ) { Text("Play test", fontSize = 13.sp) }
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
+        }
+        update?.let { u ->
+            AlertDialog(
+                onDismissRequest = { update = null; UpdateChecker.snooze24h(ctx) },
+                title = { Text("Update available: ${u.tag}") },
+                text = { Text("A new BTC Alerts build is ready. Download and install it now?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        downloading = true
+                        UpdateChecker.downloadAndInstall(ctx, u.apkUrl)
+                        update = null
+                    }) { Text(if (downloading) "Downloading…" else "Update now") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { update = null; UpdateChecker.snooze24h(ctx) }) { Text("Later") }
+                }
+            )
         }
     }
 }

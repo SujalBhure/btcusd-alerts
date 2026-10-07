@@ -26,16 +26,29 @@ jobs:
           curl -sL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp
           echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Decode signing key
+        run: echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      - name: Build signed release APK
+        run: >
+          gradle :app:assembleRelease --stacktrace
+          -Pandroid.injected.signing.store.file=/tmp/release.keystore
+          -Pandroid.injected.signing.store.password="$ANDROID_STORE_PASSWORD"
+          -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS"
+          -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+        env:
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: btcusd-alerts-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: btc-alerts-release
+          path: app/build/outputs/apk/release/app-release.apk
       - name: Publish to rolling release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest build
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: app/build/outputs/apk/release/app-release.apk
