@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.btcusd.alerts.BuildConfig
-import com.btcusd.alerts.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -37,7 +36,7 @@ object UpdateChecker {
                 if (!resp.isSuccessful) return@withContext null
                 val obj = JSONObject(resp.body!!.string())
                 val tag = obj.getString("tag_name")
-                if (norm(tag) == norm(BuildConfig.VERSION_NAME)) return@withContext null
+                if (norm(tag) == norm(com.btcusd.alerts.BuildConfig.VERSION_NAME)) return@withContext null
                 val assets = obj.getJSONArray("assets")
                 for (i in 0 until assets.length()) {
                     val a = assets.getJSONObject(i)
