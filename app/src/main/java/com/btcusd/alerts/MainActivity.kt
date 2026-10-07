@@ -117,6 +117,8 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     var showAuto by remember { mutableStateOf(false) }
     var showPerms by remember { mutableStateOf(false) }
     var askedPerms by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+    var upToDate by remember { mutableStateOf(false) }
 
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -136,6 +138,8 @@ private fun Home(db: AlertDb, resumeTick: Int) {
             if (missingPerms(ctx).isNotEmpty()) showPerms = true
         }
         if (showPerms && missingPerms(ctx).isEmpty()) showPerms = false
+        // Retry update check on every foreground (cheap call, fixes missed popups).
+        if (!UpdateChecker.snoozed(ctx)) update = UpdateChecker.check()
     }
 
     LaunchedEffect(Unit) {
@@ -223,6 +227,24 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     )
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "BTC Alerts v${com.btcusd.alerts.BuildConfig.VERSION_NAME}",
+                    color = Color(0xFF9E9E9E), fontSize = 12.sp
+                )
+                TextButton(onClick = {
+                    if (!checking) {
+                        checking = true
+                        scope.launch {
+                            val u = UpdateChecker.check()
+                            checking = false
+                            if (u != null) update = u else upToDate = true
+                        }
+                    }
+                }) { Text(if (checking) "Checking…" else "Check for updates", fontSize = 12.sp) }
+            }
+            Spacer(Modifier.height(16.dp))
         }
         if (showSheet) {
             ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = Color(0xFF14181D)) {
@@ -288,6 +310,16 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                 },
                 dismissButton = {
                     TextButton(onClick = { update = null; UpdateChecker.snooze24h(ctx) }) { Text("Later") }
+                }
+            )
+        }
+        if (upToDate) {
+            AlertDialog(
+                onDismissRequest = { upToDate = false },
+                title = { Text("You're up to date") },
+                text = { Text("BTC Alerts v${com.btcusd.alerts.BuildConfig.VERSION_NAME} is the latest version.") },
+                confirmButton = {
+                    TextButton(onClick = { upToDate = false }) { Text("OK") }
                 }
             )
         }

@@ -19,8 +19,8 @@ import java.io.File
 
 /** Checks github.com/SujalBhure/btcusd-alerts releases for a newer tag, downloads + prompts install. */
 object UpdateChecker {
-    private const val LATEST_URL =
-        "https://api.github.com/SujalBhure/btcusd-alerts/releases/latest"
+    private const val LIST_URL =
+        "https://api.github.com/SujalBhure/btcusd-alerts/releases?per_page=10"
     private const val PREFS = "btc_settings"
     private const val KEY_SNOOZE = "update_snooze_until"
     private val client = OkHttpClient()
@@ -29,15 +29,33 @@ object UpdateChecker {
 
     private fun norm(v: String) = v.trim().removePrefix("v")
 
+    private fun semver(tag: String): Triple<Int, Int, Int>? {
+        val parts = norm(tag).split(".")
+        if (parts.size != 3) return null
+        val nums = parts.map { it.toIntOrNull() ?: return null }
+        return Triple(nums[0], nums[1], nums[2])
+    }
+
+    /** Lists releases, picks the highest vX.Y.Z tag (ignores rolling/dev tags), compares. */
     suspend fun check(): Update? = withContext(Dispatchers.IO) {
         runCatching {
-            val req = Request.Builder().url(LATEST_URL).header("Accept", "application/vnd.github+json").build()
+            val req = Request.Builder().url(LIST_URL).header("Accept", "application/vnd.github+json").build()
             OkHttpClient().newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
-                val obj = JSONObject(resp.body!!.string())
-                val tag = obj.getString("tag_name")
-                if (norm(tag) == norm(com.btcusd.alerts.BuildConfig.VERSION_NAME)) return@withContext null
-                val assets = obj.getJSONArray("assets")
+                val arr = org.json.JSONArray(resp.body!!.string())
+                var best: JSONObject? = null
+                var bestVer: Triple<Int, Int, Int>? = null
+                for (i in 0 until arr.length()) {
+                    val r = arr.getJSONObject(i)
+                    if (r.optBoolean("draft", false) || r.optBoolean("prerelease", false)) continue
+                    val v = semver(r.optString("tag_name", "")) ?: continue
+                    if (bestVer == null || v > bestVer!!) { bestVer = v; best = r }
+                }
+                val rel = best ?: return@withContext null
+                val tag = rel.getString("tag_name")
+                val cur = semver(com.btcusd.alerts.BuildConfig.VERSION_NAME) ?: return@withContext null
+                if (bestVer!! <= cur) return@withContext null
+                val assets = rel.getJSONArray("assets")
                 for (i in 0 until assets.length()) {
                     val a = assets.getJSONObject(i)
                     val url = a.getString("browser_download_url")
