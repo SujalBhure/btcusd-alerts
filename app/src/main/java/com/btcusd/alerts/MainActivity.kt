@@ -61,6 +61,11 @@ import com.btcusd.alerts.alarm.SoundSettings
 import com.btcusd.alerts.data.Alert
 import com.btcusd.alerts.data.AlertDb
 import com.btcusd.alerts.data.BybitApi
+import com.btcusd.alerts.data.Feed
+import com.btcusd.alerts.data.MARKETS
+import com.btcusd.alerts.data.Market
+import com.btcusd.alerts.data.fmtPrice
+import com.btcusd.alerts.data.marketOf
 import com.btcusd.alerts.data.PriceMonitorService
 import com.btcusd.alerts.data.UpdateChecker
 import com.btcusd.alerts.ui.AppTheme
