@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -99,6 +100,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     val scope = rememberCoroutineScope()
     val alerts by db.dao().observe().collectAsState(initial = emptyList())
     val ctx = LocalContext.current
+    var market by remember { mutableStateOf(MARKETS[0]) }
     var price by remember { mutableStateOf(0.0) }
     var pct by remember { mutableStateOf(0.0) }
     var candles by remember { mutableStateOf(listOf<BybitApi.Candle>()) }
@@ -134,11 +136,15 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     LaunchedEffect(Unit) {
         scope.launch(Dispatchers.IO) { runCatching { db.dao().cleanupFiredOnce() } }
         if (!UpdateChecker.snoozed(ctx)) update = UpdateChecker.check()
-        candles = BybitApi.fetchKlines("15", 96)
-        BybitApi.fetchTicker()?.let { price = it.lastPrice; pct = it.price24hPcnt * 100 }
+    }
+
+    LaunchedEffect(market) {
+        price = 0.0; pct = 0.0; candles = emptyList()
+        candles = Feed.candles(market)
+        Feed.quote(market)?.let { price = it.last; pct = it.chgPct }
         while (true) {
             delay(15_000)
-            BybitApi.fetchTicker()?.let { price = it.lastPrice; pct = it.price24hPcnt * 100 }
+            Feed.quote(market)?.let { price = it.last; pct = it.chgPct }
         }
     }
 
@@ -153,11 +159,23 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(16.dp))
-            Text("BTCUSD PERP • BYBIT • LAST", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(MARKETS, key = { it.id }) { m ->
+                    val sel = m.id == market.id
+                    Button(
+                        onClick = { market = m },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = if (sel) ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
+                        else ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
+                    ) { Text(m.label, fontSize = 13.sp) }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(market.id + " • " + market.sub, color = Color(0xFF9E9E9E), fontSize = 12.sp)
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    if (price > 0) "$${"%,.1f".format(price)}" else "—",
+                    if (price > 0) "$" + fmtPrice(market, price) else "—",
                     color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Medium
                 )
                 Text(
@@ -184,7 +202,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     ) { Text("Sound", fontSize = 13.sp) }
                     Button(
                         onClick = {
-                            ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
+                            ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("symbol", market.id); putExtra("price", price); putExtra("target", price) })
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
                         shape = RoundedCornerShape(20.dp)
@@ -195,7 +213,6 @@ private fun Home(db: AlertDb, resumeTick: Int) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(alerts, key = { it.id }) { a ->
                     AlertRow(a,
-                        distance = if (price > 0) price - a.targetPrice else 0.0,
                         onToggle = { scope.launch(Dispatchers.IO) { db.dao().setActive(a.id, !a.active) } },
                         onDelete = { scope.launch(Dispatchers.IO) { db.dao().delete(a) } }
                     )
@@ -205,11 +222,12 @@ private fun Home(db: AlertDb, resumeTick: Int) {
         if (showSheet) {
             ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = Color(0xFF14181D)) {
                 AddAlertSheet(
+                    market = market,
                     current = price,
                     universalLabel = soundLabel,
                     onSave = { target, tone, onceMode ->
                         scope.launch(Dispatchers.IO) {
-                            db.dao().insert(Alert(targetPrice = target, direction = "cross", oneShot = onceMode, ringtoneUri = tone))
+                            db.dao().insert(Alert(symbol = market.id, targetPrice = target, direction = "cross", oneShot = onceMode, ringtoneUri = tone))
                             withContext(Dispatchers.Main) { showSheet = false }
                         }
                     }
@@ -241,7 +259,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                         ) { Text("Default", fontSize = 13.sp) }
                         Button(
                             onClick = {
-                                ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
+                                ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("symbol", market.id); putExtra("price", price); putExtra("target", price) })
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
@@ -316,19 +334,20 @@ private fun Home(db: AlertDb, resumeTick: Int) {
 }
 
 @Composable
-private fun AlertRow(a: Alert, distance: Double, onToggle: () -> Unit, onDelete: () -> Unit) {
+private fun AlertRow(a: Alert, onToggle: () -> Unit, onDelete: () -> Unit) {
+    val m = marketOf(a.symbol)
     Row(
         Modifier.fillMaxWidth().background(Color(0xFF14181D), RoundedCornerShape(12.dp)).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column {
             Text(
-                "Cross $${"%,.1f".format(a.targetPrice)}",
+                "${m.id} cross $${fmtPrice(m, a.targetPrice)}",
                 color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium
             )
             Text(
                 if (!a.active) "off"
-                else "$${"%,.1f".format(kotlin.math.abs(distance))} away • ${if (a.oneShot) "once" else "every time"}${if (a.ringtoneUri != null) " • ♪" else ""}",
+                else "${if (a.oneShot) "once" else "every time"}${if (a.ringtoneUri != null) " • ♪" else ""}",
                 color = Color(0xFF9E9E9E), fontSize = 13.sp
             )
         }
@@ -343,7 +362,7 @@ private fun AlertRow(a: Alert, distance: Double, onToggle: () -> Unit, onDelete:
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddAlertSheet(current: Double, universalLabel: String, onSave: (Double, String?, Boolean) -> Unit) {
+private fun AddAlertSheet(market: Market, current: Double, universalLabel: String, onSave: (Double, String?, Boolean) -> Unit) {
     val ctx = LocalContext.current
     var text by remember { mutableStateOf(if (current > 0) "${current.toInt()}" else "") }
     var once by remember { mutableStateOf(true) }
@@ -359,11 +378,11 @@ private fun AddAlertSheet(current: Double, universalLabel: String, onSave: (Doub
         }
     }
     Column(Modifier.fillMaxWidth().padding(20.dp)) {
-        Text("New BTCUSD alert", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+        Text("New ${market.id} alert", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = text, onValueChange = { text = it.filter { c -> c.isDigit() || c == '.' } },
-            label = { Text("Alert me when price crosses (USD)") }, singleLine = true,
+            label = { Text("Alert me when price crosses (${market.id})") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth()
         )
@@ -398,7 +417,7 @@ private fun AddAlertSheet(current: Double, universalLabel: String, onSave: (Doub
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("Fires when Bybit BTCUSD perp lastPrice crosses your level, either way.", color = Color(0xFF9E9E9E), fontSize = 13.sp)
+        Text("Fires when ${market.id} crosses your level, either way.", color = Color(0xFF9E9E9E), fontSize = 13.sp)
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = { text.toDoubleOrNull()?.let { onSave(it, toneUri?.toString(), once) } },

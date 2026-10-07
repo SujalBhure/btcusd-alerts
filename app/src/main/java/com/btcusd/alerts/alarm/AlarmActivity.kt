@@ -46,6 +46,8 @@ class AlarmActivity : ComponentActivity() {
         )
         val alertId = intent.getLongExtra("alertId", 0L)
         val oneShot = intent.getBooleanExtra("oneShot", true)
+        val symbol = intent.getStringExtra("symbol") ?: "BTCUSD"
+        val m = com.btcusd.alerts.data.marketOf(symbol)
         val target = intent.getDoubleExtra("target", 0.0)
         val price = intent.getDoubleExtra("price", 0.0)
         val ringtoneStr = intent.getStringExtra("ringtone")
@@ -64,7 +66,7 @@ class AlarmActivity : ComponentActivity() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text("BTCUSD PERP • BYBIT • LAST", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+                    Text(symbol + " • LIVE", color = Color(0xFF9E9E9E), fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
                     Text(
                         if (isTest) "TEST RING" else "PRICE CROSSED",
@@ -72,9 +74,9 @@ class AlarmActivity : ComponentActivity() {
                         fontSize = 15.sp, fontWeight = FontWeight.Medium
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text("$${"%,.1f".format(price)}", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Medium)
+                    Text("$${com.btcusd.alerts.data.fmtPrice(m, price)}", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.height(8.dp))
-                    Text("crossed $${"%,.1f".format(target)}", color = Color(0xFFB0B0B0), fontSize = 14.sp)
+                    Text("crossed $${com.btcusd.alerts.data.fmtPrice(m, target)}", color = Color(0xFFB0B0B0), fontSize = 14.sp)
                     Spacer(Modifier.height(32.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(

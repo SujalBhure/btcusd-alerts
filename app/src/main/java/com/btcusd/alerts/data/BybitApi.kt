@@ -24,9 +24,11 @@ object BybitApi {
     data class Ticker(val lastPrice: Double, val price24hPcnt: Double, val high24h: Double, val low24h: Double)
     data class Candle(val startMs: Long, val open: Double, val high: Double, val low: Double, val close: Double)
 
-    suspend fun fetchTicker(): Ticker? = withContext(Dispatchers.IO) {
+    suspend fun fetchTicker(): Ticker? = tickerFor("BTCUSD")
+
+    suspend fun tickerFor(symbol: String): Ticker? = withContext(Dispatchers.IO) {
         runCatching {
-            val req = Request.Builder().url(REST_TICKER).build()
+            val req = Request.Builder().url("https://api.bybit.com/v5/market/tickers?category=inverse&symbol=$symbol").build()
             client.newCall(req).execute().use { resp ->
                 val obj = JSONObject(resp.body!!.string())
                 val item = obj.getJSONObject("result").getJSONArray("list").getJSONObject(0)
@@ -41,9 +43,12 @@ object BybitApi {
     }
 
     suspend fun fetchKlines(interval: String = "15", limit: Int = 120): List<Candle> =
+        klinesFor("BTCUSD", interval, limit)
+
+    suspend fun klinesFor(symbol: String, interval: String = "15", limit: Int = 120): List<Candle> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val req = Request.Builder().url("$REST_KLINE&interval=$interval&limit=$limit").build()
+                val req = Request.Builder().url("https://api.bybit.com/v5/market/kline?category=inverse&symbol=$symbol&interval=$interval&limit=$limit").build()
                 client.newCall(req).execute().use { resp ->
                     val obj = JSONObject(resp.body!!.string())
                     val arr = obj.getJSONObject("result").getJSONArray("list")
@@ -56,18 +61,28 @@ object BybitApi {
         }
 
     /** Live lastPrice stream. Calls onPrice on every tickers.BTCUSD update. */
-    fun subscribeLastPrice(onPrice: (Double) -> Unit, onDown: () -> Unit = {}): WebSocket {
+    fun subscribeLastPrice(onPrice: (Double) -> Unit, onDown: () -> Unit = {}): WebSocket =
+        subscribePrices(setOf("BTCUSD"), { _, p -> onPrice(p) }, onDown)
+
+    /** One socket, many Bybit inverse symbols. Routes ticks as (symbol, price). */
+    fun subscribePrices(
+        symbols: Set<String>,
+        onPrice: (String, Double) -> Unit,
+        onDown: () -> Unit = {}
+    ): WebSocket {
         val req = Request.Builder().url(WS_URL).build()
         return client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
-                ws.send("""{"op":"subscribe","args":["tickers.BTCUSD"]}""")
+                val args = symbols.joinToString(",") { "\"tickers.$it\"" }
+                ws.send("""{"op":"subscribe","args":[$args]}""")
             }
             override fun onMessage(ws: WebSocket, text: String) {
                 runCatching {
                     val obj = JSONObject(text)
-                    if (obj.optString("topic") == "tickers.BTCUSD") {
+                    val topic = obj.optString("topic")
+                    if (topic.startsWith("tickers.")) {
                         val d = obj.getJSONObject("data")
-                        onPrice(d.getString("lastPrice").toDouble())
+                        onPrice(topic.removePrefix("tickers."), d.getString("lastPrice").toDouble())
                     }
                 }
             }

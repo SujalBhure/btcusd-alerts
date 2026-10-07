@@ -22,20 +22,20 @@ import kotlinx.coroutines.launch
 import okhttp3.WebSocket
 
 /**
- * Sticky foreground service: holds Bybit WS for BTCUSD perp lastPrice,
- * fires on CROSSING (either direction), rings even with app closed/locked
- * via high-importance full-screen notification (background launches are
- * blocked by Android, a notification full-screen intent is the way through).
+ * Sticky foreground service: watches every market that has an active alert.
+ * Bybit inverse markets share one WebSocket; Delta markets are REST-polled.
+ * Fires on CROSSING (either direction), rings via full-screen notification
+ * even with app closed / screen locked.
  */
 class PriceMonitorService : LifecycleService() {
 
     private lateinit var db: AlertDb
     private var ws: WebSocket? = null
     private var watchJob: Job? = null
+    private var deltaJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    @Volatile private var lastPrice: Double = 0.0
-    @Volatile private var prevPrice: Double = 0.0
-    @Volatile private var lastTickMs: Long = 0L
+    private val prev = mutableMapOf<String, Double>()
+    private val lastTick = mutableMapOf<String, Long>()
 
     override fun onCreate() {
         super.onCreate()
@@ -46,8 +46,9 @@ class PriceMonitorService : LifecycleService() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTCAlerts:monitor")
             .apply { runCatching { acquire() } }
         startForeground(1, persistentNotification())
-        connectWs()
+        lifecycleScope.launch { refreshFeeds() }
         startWatchdog()
+        startDeltaLoop()
     }
 
     private fun persistentNotification(): Notification {
@@ -62,19 +63,41 @@ class PriceMonitorService : LifecycleService() {
         )
         return NotificationCompat.Builder(this, ch)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Watching BTCUSD Perp • Bybit lastPrice")
-            .setContentText(if (lastPrice > 0) "$$lastPrice" else "connecting…")
+            .setContentTitle("Watching alerts • Bybit + Delta")
+            .setContentText("tap to open BTC Alerts")
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
     }
 
+    /** Bybit symbols currently needing live ticks (have active alerts, default BTCUSD). */
+    private suspend fun bybitSyms(): Set<String> {
+        val ids = db.dao().active().map { it.symbol }.ifEmpty { listOf("BTCUSD") }
+        return ids.mapNotNull { id ->
+            (marketOf(id).kind as? Market.Kind.BybitInverse)?.symbol
+        }.toSet()
+    }
+
+    private suspend fun deltaMarkets(): List<Market> {
+        val ids = db.dao().active().map { it.symbol }.ifEmpty { listOf("BTCUSD") }
+        return ids.map { marketOf(it) }.filter { it.kind is Market.Kind.Delta }.distinctBy { it.id }
+    }
+
+    private suspend fun refreshFeeds() {
+        connectWs()
+        pollAll()
+    }
+
     private fun connectWs() {
-        runCatching { ws?.cancel() }
-        ws = BybitApi.subscribeLastPrice(
-            onPrice = { p -> lifecycleScope.launch { onTick(p) } },
-            onDown = { }
-        )
+        lifecycleScope.launch {
+            runCatching { ws?.cancel() }
+            val syms = bybitSyms().ifEmpty { setOf("BTCUSD") }
+            ws = BybitApi.subscribePrices(
+                syms,
+                onPrice = { s, p -> lifecycleScope.launch { onTick(s, p) } },
+                onDown = { }
+            )
+        }
     }
 
     /** If the socket goes silent (Doze/OEM kill/network), reconnect + REST tick. */
@@ -83,24 +106,47 @@ class PriceMonitorService : LifecycleService() {
         watchJob = lifecycleScope.launch {
             while (isActive) {
                 delay(30_000)
-                if (System.currentTimeMillis() - lastTickMs > 45_000) {
+                val stale = bybitSyms().any { (lastTick[it] ?: 0) < System.currentTimeMillis() - 45_000 }
+                if (stale) {
                     connectWs()
-                    BybitApi.fetchTicker()?.let { onTick(it.lastPrice) }
+                    pollAll()
                 }
             }
         }
     }
 
-    private suspend fun onTick(price: Double) {
-        val prev = lastPrice
-        prevPrice = if (prev > 0) prev else price
-        lastPrice = price
-        lastTickMs = System.currentTimeMillis()
-        val now = lastTickMs
-        for (a in db.dao().active()) {
+    /** Delta India has no keyless push feed here → poll every 20s. */
+    private fun startDeltaLoop() {
+        deltaJob?.cancel()
+        deltaJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(20_000)
+                for (m in deltaMarkets()) {
+                    val k = m.kind as? Market.Kind.Delta ?: continue
+                    DeltaApi.ticker(k.symbol)?.let { onTick(m.id, it.last) }
+                }
+            }
+        }
+    }
+
+    private suspend fun pollAll() {
+        for (s in bybitSyms()) BybitApi.tickerFor(s)?.let { onTick(s, it.lastPrice) }
+        for (m in deltaMarkets()) {
+            val k = m.kind as? Market.Kind.Delta ?: continue
+            DeltaApi.ticker(k.symbol)?.let { onTick(m.id, it.last) }
+        }
+    }
+
+    private suspend fun onTick(marketId: String, price: Double) {
+        val p = prev[marketId]
+        prev[marketId] = price
+        lastTick[marketId] = System.currentTimeMillis()
+        if (p == null || p <= 0) return
+        val now = System.currentTimeMillis()
+        for (a in db.dao().active().filter { it.symbol == marketId }) {
             if (now < a.snoozeUntilMs) continue
             if (now - a.lastFiredMs < 60_000) continue
-            val d1 = prevPrice - a.targetPrice
+            val d1 = p - a.targetPrice
             val d2 = price - a.targetPrice
             val crossed = d1 != 0.0 && (d1 < 0 != d2 < 0 || d2 == 0.0)
             if (crossed) {
@@ -113,16 +159,18 @@ class PriceMonitorService : LifecycleService() {
     private fun fireAlarm(a: Alert, price: Double) {
         ensureAlertChannel(this)
         val target = a.targetPrice
+        val m = marketOf(a.symbol)
         val full = Intent(this, AlarmActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             putExtra("alertId", a.id)
             putExtra("oneShot", a.oneShot)
+            putExtra("symbol", m.id)
             putExtra("target", target)
             putExtra("price", price)
             putExtra("ringtone", a.ringtoneUri)
         }
         val pi = PendingIntent.getActivity(
-            this, target.hashCode(), full,
+            this, a.id.toInt(), full,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val sound = a.ringtoneUri?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
@@ -130,8 +178,8 @@ class PriceMonitorService : LifecycleService() {
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val notif = NotificationCompat.Builder(this, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("BTCUSD crossed $${"%,.1f".format(target)}")
-            .setContentText("Now $${"%,.1f".format(price)} • Tap to open")
+            .setContentTitle("${m.id} crossed $${fmtPrice(m, target)}")
+            .setContentText("Now $${fmtPrice(m, price)} • Tap to open")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setFullScreenIntent(pi, true)
@@ -140,7 +188,7 @@ class PriceMonitorService : LifecycleService() {
             .setSound(sound)
             .setVibrate(longArrayOf(0, 500, 250, 500))
             .build()
-        getSystemService(NotificationManager::class.java).notify(target.hashCode(), notif)
+        getSystemService(NotificationManager::class.java).notify(a.id.toInt(), notif)
         // Works when app is in foreground; the full-screen notification covers background/lock.
         runCatching { startActivity(full) }
     }
@@ -153,6 +201,7 @@ class PriceMonitorService : LifecycleService() {
     override fun onDestroy() {
         runCatching { ws?.cancel() }
         watchJob?.cancel()
+        deltaJob?.cancel()
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         super.onDestroy()
     }
