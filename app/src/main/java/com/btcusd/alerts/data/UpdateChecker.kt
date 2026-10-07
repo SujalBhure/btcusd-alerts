@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.btcusd.alerts.BuildConfig
+import com.btcusd.alerts.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient

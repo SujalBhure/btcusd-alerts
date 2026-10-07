@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
 private fun Home(db: AlertDb) {
     val scope = rememberCoroutineScope()
     val alerts by db.dao().observe().collectAsState(initial = emptyList())
+    val ctx = LocalContext.current
     var price by remember { mutableStateOf(0.0) }
     var pct by remember { mutableStateOf(0.0) }
     var candles by remember { mutableStateOf(listOf<BybitApi.Candle>()) }
@@ -100,7 +101,6 @@ private fun Home(db: AlertDb) {
     var soundLabel by remember { mutableStateOf(SoundSettings.label(ctx)) }
     var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
     var downloading by remember { mutableStateOf(false) }
-    val ctx = LocalContext.current
 
     val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
