@@ -1,12 +1,13 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- Amber candlestick: wick + body, exact rects on dark ground -->
-    <rect android:fillColor="#F7A600" android:left="52" android:top="22" android:right="56" android:bottom="86" />
-    <rect android:fillColor="#F7A600" android:left="42" android:top="38" android:right="66" android:bottom="70" />
-    <!-- Green/red ticks: up left, down right -->
-    <rect android:fillColor="#0ECB81" android:left="24" android:top="52" android:right="27" android:bottom="76" />
-    <rect android:fillColor="#0ECB81" android:left="18" android:top="58" android:right="33" android:bottom="70" />
-    <rect android:fillColor="#F6465D" android:left="81" android:top="34" android:right="84" android:bottom="58" />
-    <rect android:fillColor="#F6465D" android:left="75" android:top="40" android:right="90" android:bottom="52" />
+    <!-- Amber candlestick: wick + body -->
+    <path android:fillColor="#F7A600" android:pathData="M52,22 H56 V86 H52 Z" />
+    <path android:fillColor="#F7A600" android:pathData="M42,38 H66 V70 H42 Z" />
+    <!-- Green tick left -->
+    <path android:fillColor="#0ECB81" android:pathData="M24,52 H27 V76 H24 Z" />
+    <path android:fillColor="#0ECB81" android:pathData="M18,58 H33 V70 H18 Z" />
+    <!-- Red tick right -->
+    <path android:fillColor="#F6465D" android:pathData="M81,34 H84 V58 H81 Z" />
+    <path android:fillColor="#F6465D" android:pathData="M75,40 H90 V52 H75 Z" />
 </vector>
