@@ -35,9 +35,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -101,6 +98,8 @@ private fun Home(db: AlertDb) {
     var soundLabel by remember { mutableStateOf(SoundSettings.label(ctx)) }
     var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
     var downloading by remember { mutableStateOf(false) }
+    var showBattery by remember { mutableStateOf(false) }
+    var showAuto by remember { mutableStateOf(false) }
 
     val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -113,6 +112,8 @@ private fun Home(db: AlertDb) {
     }
 
     LaunchedEffect(Unit) {
+        val pm = ctx.getSystemService(android.os.PowerManager::class.java)
+        if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) showBattery = true
         if (!UpdateChecker.snoozed(ctx)) update = UpdateChecker.check()
         candles = BybitApi.fetchKlines("15", 96)
         BybitApi.fetchTicker()?.let { price = it.lastPrice; pct = it.price24hPcnt * 100 }
@@ -156,14 +157,14 @@ private fun Home(db: AlertDb) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { showSound = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
                         shape = RoundedCornerShape(20.dp)
                     ) { Text("Sound", fontSize = 13.sp) }
                     Button(
                         onClick = {
                             ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
                         shape = RoundedCornerShape(20.dp)
                     ) { Text("Test ring", fontSize = 13.sp) }
                 }
@@ -183,9 +184,9 @@ private fun Home(db: AlertDb) {
             ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = Color(0xFF14181D)) {
                 AddAlertSheet(
                     current = price,
-                    onSave = { target, dir ->
+                    onSave = { target ->
                         scope.launch(Dispatchers.IO) {
-                            db.dao().insert(Alert(targetPrice = target, direction = dir))
+                            db.dao().insert(Alert(targetPrice = target, direction = "cross"))
                             withContext(Dispatchers.Main) { showSheet = false }
                         }
                     }
@@ -213,14 +214,14 @@ private fun Home(db: AlertDb) {
                                 soundLabel = SoundSettings.label(ctx)
                             },
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E))
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
                         ) { Text("Default", fontSize = 13.sp) }
                         Button(
                             onClick = {
                                 ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("price", price); putExtra("target", price) })
                             },
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E))
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
                         ) { Text("Play test", fontSize = 13.sp) }
                     }
                     Spacer(Modifier.height(24.dp))
@@ -244,6 +245,37 @@ private fun Home(db: AlertDb) {
                 }
             )
         }
+        if (showBattery) {
+            AlertDialog(
+                onDismissRequest = { showBattery = false },
+                title = { Text("Keep alerts ringing in background") },
+                text = { Text("Android kills background apps to save battery. Allow BTC Alerts to run unrestricted, or alerts will only fire while the app is open.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showBattery = false
+                        runCatching {
+                            ctx.startActivity(android.content.Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                android.net.Uri.parse("package:${ctx.packageName}")
+                            ))
+                        }
+                    }) { Text("Allow background") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBattery = false; showAuto = true }) { Text("Autostart help") }
+                }
+            )
+        }
+        if (showAuto) {
+            AlertDialog(
+                onDismissRequest = { showAuto = false },
+                title = { Text("Autostart help") },
+                text = { Text("vivo / iQOO: Settings → Battery → Background power consumption → BTC Alerts → Allow. Then Settings → Apps → BTC Alerts → turn on Autostart. Also open Recents and lock BTC Alerts so swiping it away doesn't kill alerts.\n\nXiaomi: Settings → Apps → Manage apps → BTC Alerts → Autostart → on, Battery saver → No restrictions.\n\nSamsung: Settings → Battery → Background usage limits → Never sleeping apps → add BTC Alerts.") },
+                confirmButton = {
+                    TextButton(onClick = { showAuto = false }) { Text("Got it") }
+                }
+            )
+        }
     }
 }
 
@@ -255,7 +287,7 @@ private fun AlertRow(a: Alert, distance: Double, onToggle: () -> Unit, onDelete:
     ) {
         Column {
             Text(
-                "${if (a.direction == "above") "Above" else "Below"} $${"%,.1f".format(a.targetPrice)}",
+                "Cross $${"%,.1f".format(a.targetPrice)}",
                 color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium
             )
             Text(
@@ -274,32 +306,22 @@ private fun AlertRow(a: Alert, distance: Double, onToggle: () -> Unit, onDelete:
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddAlertSheet(current: Double, onSave: (Double, String) -> Unit) {
+private fun AddAlertSheet(current: Double, onSave: (Double) -> Unit) {
     var text by remember { mutableStateOf(if (current > 0) "${current.toInt()}" else "") }
-    var dirIdx by remember { mutableStateOf(0) }
     Column(Modifier.fillMaxWidth().padding(20.dp)) {
         Text("New BTCUSD alert", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(12.dp))
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            listOf("Above", "Below").forEachIndexed { i, label ->
-                SegmentedButton(
-                    selected = dirIdx == i, onClick = { dirIdx = i },
-                    shape = SegmentedButtonDefaults.itemShape(i, 2)
-                ) { Text(label) }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = text, onValueChange = { text = it.filter { c -> c.isDigit() || c == '.' } },
-            label = { Text("Target price (USD)") }, singleLine = true,
+            label = { Text("Alert me when price crosses (USD)") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(6.dp))
-        Text("Watches Bybit BTCUSD perp lastPrice.", color = Color(0xFF9E9E9E), fontSize = 13.sp)
+        Text("Fires when Bybit BTCUSD perp lastPrice crosses your level, either way.", color = Color(0xFF9E9E9E), fontSize = 13.sp)
         Spacer(Modifier.height(16.dp))
         Button(
-            onClick = { text.toDoubleOrNull()?.let { onSave(it, if (dirIdx == 0) "above" else "below") } },
+            onClick = { text.toDoubleOrNull()?.let { onSave(it) } },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)

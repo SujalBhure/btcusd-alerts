@@ -47,9 +47,9 @@ class AlarmActivity : ComponentActivity() {
         RingtonePlayer.start(this)
 
         val target = intent.getDoubleExtra("target", 0.0)
-        val dir = intent.getStringExtra("direction") ?: "above"
         val price = intent.getDoubleExtra("price", 0.0)
         val isTest = intent.getBooleanExtra("test", false)
+        val up = price >= target
 
         setContent {
             AppTheme {
@@ -62,21 +62,21 @@ class AlarmActivity : ComponentActivity() {
                     Text("BTCUSD PERP • BYBIT • LAST", color = Color(0xFF9E9E9E), fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        if (isTest) "TEST RING" else if (dir == "above") "CROSSED ABOVE" else "CROSSED BELOW",
-                        color = if (dir == "above") Color(0xFF0ECB81) else Color(0xFFF6465D),
+                        if (isTest) "TEST RING" else "PRICE CROSSED",
+                        color = if (up) Color(0xFF0ECB81) else Color(0xFFF6465D),
                         fontSize = 15.sp, fontWeight = FontWeight.Medium
                     )
                     Spacer(Modifier.height(8.dp))
                     Text("$${"%,.1f".format(price)}", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.height(8.dp))
-                    Text("alert $${"%,.1f".format(target)}", color = Color(0xFFB0B0B0), fontSize = 14.sp)
+                    Text("crossed $${"%,.1f".format(target)}", color = Color(0xFFB0B0B0), fontSize = 14.sp)
                     Spacer(Modifier.height(32.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
                             onClick = { RingtonePlayer.stop(); finish() },
                             modifier = Modifier.weight(1f).height(52.dp),
                             shape = RoundedCornerShape(26.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23282E))
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
                         ) { Text("Dismiss") }
                         Button(
                             onClick = {
