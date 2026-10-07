@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,3 +33,9 @@ jobs:
         with:
           name: btcusd-alerts-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish to rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          files: app/build/outputs/apk/debug/app-debug.apk
