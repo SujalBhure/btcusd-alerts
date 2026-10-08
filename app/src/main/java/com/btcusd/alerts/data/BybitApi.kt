@@ -21,7 +21,7 @@ object BybitApi {
 
     private val client = OkHttpClient()
 
-    data class Ticker(val lastPrice: Double, val price24hPcnt: Double, val high24h: Double, val low24h: Double)
+    data class Ticker(val lastPrice: Double, val prev24h: Double, val price24hPcnt: Double, val high24h: Double, val low24h: Double)
     data class Candle(val startMs: Long, val open: Double, val high: Double, val low: Double, val close: Double)
 
     suspend fun fetchTicker(): Ticker? = tickerFor("BTCUSD")
@@ -34,6 +34,7 @@ object BybitApi {
                 val item = obj.getJSONObject("result").getJSONArray("list").getJSONObject(0)
                 Ticker(
                     lastPrice = item.getString("lastPrice").toDouble(),
+                    prev24h = item.optString("prevPrice24h", "0").toDoubleOrNull() ?: 0.0,
                     price24hPcnt = item.optString("price24hPcnt", "0").toDouble(),
                     high24h = item.optString("highPrice24h", "0").toDoubleOrNull() ?: 0.0,
                     low24h = item.optString("lowPrice24h", "0").toDoubleOrNull() ?: 0.0

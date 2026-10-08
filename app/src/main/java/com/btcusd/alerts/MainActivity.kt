@@ -9,6 +9,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,19 +20,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -69,7 +74,6 @@ import com.btcusd.alerts.data.marketOf
 import com.btcusd.alerts.data.PriceMonitorService
 import com.btcusd.alerts.data.UpdateChecker
 import com.btcusd.alerts.ui.AppTheme
-import com.btcusd.alerts.ui.CandleChart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -105,10 +109,8 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     val scope = rememberCoroutineScope()
     val alerts by db.dao().observe().collectAsState(initial = emptyList())
     val ctx = LocalContext.current
-    var market by remember { mutableStateOf(MARKETS[0]) }
-    var price by remember { mutableStateOf(0.0) }
-    var pct by remember { mutableStateOf(0.0) }
-    var candles by remember { mutableStateOf(listOf<BybitApi.Candle>()) }
+    var quotes by remember { mutableStateOf(mapOf<String, Feed.Quote>()) }
+    var sheetMarket by remember { mutableStateOf<Market?>(null) }
     var showSheet by remember { mutableStateOf(false) }
     var showSound by remember { mutableStateOf(false) }
     var soundLabel by remember { mutableStateOf(SoundSettings.label(ctx)) }
@@ -147,59 +149,23 @@ private fun Home(db: AlertDb, resumeTick: Int) {
         if (!UpdateChecker.snoozed(ctx)) update = UpdateChecker.check()
     }
 
-    LaunchedEffect(market) {
-        price = 0.0; pct = 0.0; candles = emptyList()
-        candles = Feed.candles(market)
-        Feed.quote(market)?.let { price = it.last; pct = it.chgPct }
+    LaunchedEffect(Unit) {
         while (true) {
+            val fresh = MARKETS.mapNotNull { m -> Feed.quote(m)?.let { m.id to it } }.toMap()
+            if (fresh.isNotEmpty()) quotes = fresh
             delay(15_000)
-            Feed.quote(market)?.let { price = it.last; pct = it.chgPct }
         }
     }
 
     Scaffold(
-        containerColor = Color(0xFF0B0E11),
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showSheet = true },
-                containerColor = Color(0xFFF7A600), contentColor = Color.Black
-            ) { Icon(Icons.Default.Add, contentDescription = "Add alert") }
-        }
+        containerColor = Color(0xFF000000)
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 20.dp)) {
-            Spacer(Modifier.height(16.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(MARKETS, key = { it.id }) { m ->
-                    val sel = m.id == market.id
-                    Button(
-                        onClick = { market = m },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = if (sel) ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
-                        else ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
-                    ) { Text(m.label, fontSize = 13.sp) }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(market.id + " • " + market.sub, color = Color(0xFF9E9E9E), fontSize = 12.sp)
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    if (price > 0) "$" + fmtPrice(market, price) else "—",
-                    color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Medium
-                )
-                Text(
-                    "${if (pct >= 0) "+" else ""}${"%.2f".format(pct)}%",
-                    color = if (pct >= 0) Color(0xFF0ECB81) else Color(0xFFF6465D),
-                    fontSize = 14.sp, modifier = Modifier.padding(bottom = 6.dp)
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            CandleChart(candles, price)
-            Spacer(Modifier.height(8.dp))
-            Text("Watches Bybit BTCUSD perp lastPrice. Rings full-screen like a call.", color = Color(0xFF9E9E9E), fontSize = 13.sp)
-            Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Alerts (${alerts.size})", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("BTC Alerts", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { showPerms = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Permissions", tint = Color.White)
@@ -211,50 +177,66 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     ) { Text("Sound", fontSize = 13.sp) }
                     Button(
                         onClick = {
-                            ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("symbol", market.id); putExtra("price", price); putExtra("target", price) })
+                            val q = quotes["BTCUSD"]
+                            ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply {
+                                putExtra("test", true); putExtra("symbol", "BTCUSD")
+                                putExtra("price", q?.last ?: 0.0); putExtra("target", q?.last ?: 0.0)
+                            })
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
                         shape = RoundedCornerShape(20.dp)
                     ) { Text("Test ring", fontSize = 13.sp) }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(alerts, key = { it.id }) { a ->
+            LazyColumn(Modifier.weight(1f)) {
+                items(MARKETS, key = { it.id }) { m ->
+                    WatchRow(m, quotes[m.id], alerts.count { it.symbol == m.id && it.active }) {
+                        sheetMarket = m; showSheet = true
+                    }
+                }
+                item {
+                    Text(
+                        "Alerts (${alerts.size}) — tap a market to add",
+                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                    )
+                }
+                items(alerts, key = { "a" + it.id }) { a ->
                     AlertRow(a,
                         onToggle = { scope.launch(Dispatchers.IO) { db.dao().setActive(a.id, !a.active) } },
                         onDelete = { scope.launch(Dispatchers.IO) { db.dao().delete(a) } }
                     )
                 }
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "BTC Alerts v${com.btcusd.alerts.BuildConfig.VERSION_NAME}",
-                    color = Color(0xFF9E9E9E), fontSize = 12.sp
-                )
-                TextButton(onClick = {
-                    if (!checking) {
-                        checking = true
-                        scope.launch {
-                            val u = UpdateChecker.check()
-                            checking = false
-                            if (u != null) update = u else upToDate = true
-                        }
+                item {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "BTC Alerts v${com.btcusd.alerts.BuildConfig.VERSION_NAME}",
+                            color = Color(0xFF9E9E9E), fontSize = 12.sp
+                        )
+                        TextButton(onClick = {
+                            if (!checking) {
+                                checking = true
+                                scope.launch {
+                                    val u = UpdateChecker.check()
+                                    checking = false
+                                    if (u != null) update = u else upToDate = true
+                                }
+                            }
+                        }) { Text(if (checking) "Checking…" else "Check for updates", fontSize = 12.sp) }
                     }
-                }) { Text(if (checking) "Checking…" else "Check for updates", fontSize = 12.sp) }
+                }
             }
-            Spacer(Modifier.height(16.dp))
         }
-        if (showSheet) {
+        val sm = sheetMarket
+        if (showSheet && sm != null) {
             ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = Color(0xFF14181D)) {
                 AddAlertSheet(
-                    market = market,
-                    current = price,
+                    market = sm,
+                    current = quotes[sm.id]?.last ?: 0.0,
                     universalLabel = soundLabel,
                     onSave = { target, tone, onceMode ->
                         scope.launch(Dispatchers.IO) {
-                            db.dao().insert(Alert(symbol = market.id, targetPrice = target, direction = "cross", oneShot = onceMode, ringtoneUri = tone))
+                            db.dao().insert(Alert(symbol = sm.id, targetPrice = target, direction = "cross", oneShot = onceMode, ringtoneUri = tone))
                             withContext(Dispatchers.Main) { showSheet = false }
                         }
                     }
@@ -286,7 +268,11 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                         ) { Text("Default", fontSize = 13.sp) }
                         Button(
                             onClick = {
-                                ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply { putExtra("test", true); putExtra("symbol", market.id); putExtra("price", price); putExtra("target", price) })
+                                val q = quotes["BTCUSD"]
+                                ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply {
+                                    putExtra("test", true); putExtra("symbol", "BTCUSD")
+                                    putExtra("price", q?.last ?: 0.0); putExtra("target", q?.last ?: 0.0)
+                                })
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
@@ -371,10 +357,56 @@ private fun Home(db: AlertDb, resumeTick: Int) {
 }
 
 @Composable
+private fun WatchRow(m: Market, q: Feed.Quote?, activeCount: Int, onTap: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onTap).padding(horizontal = 20.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(contentAlignment = Alignment.TopEnd) {
+                Box(
+                    Modifier.size(48.dp).background(Color(m.badgeBg), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(m.badge, color = Color(m.badgeFg), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+                if (activeCount > 0) {
+                    Box(
+                        Modifier.size(20.dp).background(Color(0xFF14181D), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Notifications, contentDescription = "alert set", tint = Color(0xFFF7A600), modifier = Modifier.size(13.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(m.label, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                Text(m.desc, color = Color(0xFF9E9E9E), fontSize = 14.sp, maxLines = 1)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    if (q != null) fmtPrice(m, q.last) else "—",
+                    color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Medium
+                )
+                if (q != null) {
+                    val up = q.absChange >= 0
+                    Text(
+                        "${if (up) "+" else "−"}${fmtPrice(m, kotlin.math.abs(q.absChange))}  ${if (up) "+" else "−"}${"%.2f".format(kotlin.math.abs(q.chgPct))}%",
+                        color = if (up) Color(0xFF0ECB81) else Color(0xFFF6465D), fontSize = 14.sp
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = Color.White.copy(alpha = 0.08f), thickness = 1.dp)
+    }
+}
+
+@Composable
 private fun AlertRow(a: Alert, onToggle: () -> Unit, onDelete: () -> Unit) {
     val m = marketOf(a.symbol)
     Row(
-        Modifier.fillMaxWidth().background(Color(0xFF14181D), RoundedCornerShape(12.dp)).padding(16.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp).background(Color(0xFF14181D), RoundedCornerShape(12.dp)).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column {

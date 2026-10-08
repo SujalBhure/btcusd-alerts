@@ -32,7 +32,7 @@ class PriceMonitorService : LifecycleService() {
     private lateinit var db: AlertDb
     private var ws: WebSocket? = null
     private var watchJob: Job? = null
-    private var deltaJob: Job? = null
+    private var pollJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val prev = mutableMapOf<String, Double>()
     private val lastTick = mutableMapOf<String, Long>()
@@ -48,7 +48,7 @@ class PriceMonitorService : LifecycleService() {
         startForeground(1, persistentNotification())
         lifecycleScope.launch { refreshFeeds() }
         startWatchdog()
-        startDeltaLoop()
+        startPollLoop()
     }
 
     private fun persistentNotification(): Notification {
@@ -78,9 +78,9 @@ class PriceMonitorService : LifecycleService() {
         }.toSet()
     }
 
-    private suspend fun deltaMarkets(): List<Market> {
+    private suspend fun restMarkets(): List<Market> {
         val ids = db.dao().active().map { it.symbol }.ifEmpty { listOf("BTCUSD") }
-        return ids.map { marketOf(it) }.filter { it.kind is Market.Kind.Delta }.distinctBy { it.id }
+        return ids.map { marketOf(it) }.filter { it.kind !is Market.Kind.BybitInverse }.distinctBy { it.id }
     }
 
     private suspend fun refreshFeeds() {
@@ -115,15 +115,14 @@ class PriceMonitorService : LifecycleService() {
         }
     }
 
-    /** Delta India has no keyless push feed here → poll every 20s. */
-    private fun startDeltaLoop() {
-        deltaJob?.cancel()
-        deltaJob = lifecycleScope.launch {
+    /** Non-Bybit markets (Delta, Swissquote) are REST-polled every 20s. */
+    private fun startPollLoop() {
+        pollJob?.cancel()
+        pollJob = lifecycleScope.launch {
             while (isActive) {
                 delay(20_000)
-                for (m in deltaMarkets()) {
-                    val k = m.kind as? Market.Kind.Delta ?: continue
-                    DeltaApi.ticker(k.symbol)?.let { onTick(m.id, it.last) }
+                for (m in restMarkets()) {
+                    Feed.quote(m)?.let { onTick(m.id, it.last) }
                 }
             }
         }
@@ -131,9 +130,8 @@ class PriceMonitorService : LifecycleService() {
 
     private suspend fun pollAll() {
         for (s in bybitSyms()) BybitApi.tickerFor(s)?.let { onTick(s, it.lastPrice) }
-        for (m in deltaMarkets()) {
-            val k = m.kind as? Market.Kind.Delta ?: continue
-            DeltaApi.ticker(k.symbol)?.let { onTick(m.id, it.last) }
+        for (m in restMarkets()) {
+            Feed.quote(m)?.let { onTick(m.id, it.last) }
         }
     }
 
@@ -201,7 +199,7 @@ class PriceMonitorService : LifecycleService() {
     override fun onDestroy() {
         runCatching { ws?.cancel() }
         watchJob?.cancel()
-        deltaJob?.cancel()
+        pollJob?.cancel()
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         super.onDestroy()
     }
