@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -121,6 +122,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     var quotes by remember { mutableStateOf(mapOf<String, Feed.Quote>()) }
     var sheetMarket by remember { mutableStateOf<Market?>(null) }
     var showSheet by remember { mutableStateOf(false) }
+    var editingAlert by remember { mutableStateOf<Alert?>(null) }
     var showSound by remember { mutableStateOf(false) }
     var soundRefreshKey by remember { mutableIntStateOf(0) }
     var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
@@ -204,15 +206,17 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                 }
                 item {
                     Text(
-                        "Alerts (${alerts.size}) — tap a market to add",
+                        "Alerts (${alerts.size}) — tap alert to edit",
                         color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                     )
                 }
                 items(alerts, key = { "a" + it.id }) { a ->
-                    AlertRow(a,
+                    AlertRow(
+                        a = a,
                         onToggle = { scope.launch(Dispatchers.IO) { db.dao().setActive(a.id, !a.active) } },
-                        onDelete = { scope.launch(Dispatchers.IO) { db.dao().delete(a) } }
+                        onDelete = { scope.launch(Dispatchers.IO) { db.dao().delete(a) } },
+                        onEdit = { editingAlert = a }
                     )
                 }
                 item {
@@ -238,10 +242,11 @@ private fun Home(db: AlertDb, resumeTick: Int) {
         val sm = sheetMarket
         if (showSheet && sm != null) {
             ModalBottomSheet(onDismissRequest = { showSheet = false }, containerColor = Color(0xFF14181D)) {
-                AddAlertSheet(
+                AlertSheet(
                     market = sm,
                     current = quotes[sm.id]?.last ?: 0.0,
                     soundRefreshKey = soundRefreshKey,
+                    initialAlert = null,
                     onSave = { target, tone, onceMode, alertType ->
                         scope.launch(Dispatchers.IO) {
                             db.dao().insert(
@@ -255,6 +260,39 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                                 )
                             )
                             withContext(Dispatchers.Main) { showSheet = false }
+                        }
+                    }
+                )
+            }
+        }
+        val ea = editingAlert
+        if (ea != null) {
+            val em = marketOf(ea.symbol)
+            ModalBottomSheet(onDismissRequest = { editingAlert = null }, containerColor = Color(0xFF14181D)) {
+                AlertSheet(
+                    market = em,
+                    current = quotes[em.id]?.last ?: 0.0,
+                    soundRefreshKey = soundRefreshKey,
+                    initialAlert = ea,
+                    onSave = { target, tone, onceMode, alertType ->
+                        scope.launch(Dispatchers.IO) {
+                            db.dao().update(
+                                ea.copy(
+                                    targetPrice = target,
+                                    direction = "cross",
+                                    oneShot = onceMode,
+                                    ringtoneUri = tone,
+                                    alertType = alertType,
+                                    active = true
+                                )
+                            )
+                            withContext(Dispatchers.Main) { editingAlert = null }
+                        }
+                    },
+                    onDelete = {
+                        scope.launch(Dispatchers.IO) {
+                            db.dao().delete(ea)
+                            withContext(Dispatchers.Main) { editingAlert = null }
                         }
                     }
                 )
@@ -393,7 +431,12 @@ private fun WatchRow(m: Market, q: Feed.Quote?, activeCount: Int, onTap: () -> U
 }
 
 @Composable
-private fun AlertRow(a: Alert, onToggle: () -> Unit, onDelete: () -> Unit) {
+private fun AlertRow(
+    a: Alert,
+    onToggle: () -> Unit,
+    onDelete: () -> Unit,
+    onEdit: () -> Unit
+) {
     val m = marketOf(a.symbol)
     val ctx = LocalContext.current
 
@@ -406,8 +449,14 @@ private fun AlertRow(a: Alert, onToggle: () -> Unit, onDelete: () -> Unit) {
     }
 
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp).background(Color(0xFF14181D), RoundedCornerShape(12.dp)).padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 4.dp)
+            .background(Color(0xFF14181D), RoundedCornerShape(12.dp))
+            .clickable(onClick = onEdit)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -433,13 +482,16 @@ private fun AlertRow(a: Alert, onToggle: () -> Unit, onDelete: () -> Unit) {
                 if (typeUri != null) SoundSettings.getSoundLabel(ctx, typeKey) else "universal"
             }
             Text(
-                if (!a.active) "off"
-                else "${if (a.oneShot) "once" else "every time"} • ♪ $soundLabel",
+                if (!a.active) "off • tap to edit"
+                else "${if (a.oneShot) "once" else "every time"} • ♪ $soundLabel • tap to edit",
                 color = Color(0xFF9E9E9E), fontSize = 13.sp
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = a.active, onCheckedChange = { onToggle() })
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit alert", tint = Color(0xFFB0B0B0), modifier = Modifier.size(20.dp))
+            }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFF9E9E9E))
             }
@@ -449,19 +501,42 @@ private fun AlertRow(a: Alert, onToggle: () -> Unit, onDelete: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddAlertSheet(
+private fun AlertSheet(
     market: Market,
     current: Double,
     soundRefreshKey: Int,
-    onSave: (Double, String?, Boolean, String) -> Unit
+    initialAlert: Alert? = null,
+    onSave: (Double, String?, Boolean, String) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
-    var text by remember { mutableStateOf(if (current > 0) "${current.toInt()}" else "") }
-    var once by remember { mutableStateOf(true) }
+    var text by remember {
+        mutableStateOf(
+            if (initialAlert != null) {
+                if (initialAlert.targetPrice % 1.0 == 0.0) initialAlert.targetPrice.toLong().toString()
+                else initialAlert.targetPrice.toString()
+            } else if (current > 0) {
+                "${current.toInt()}"
+            } else ""
+        )
+    }
+    var once by remember { mutableStateOf(initialAlert?.oneShot ?: true) }
 
-    // Alert type selection
-    var selectedType by remember { mutableStateOf("LEVEL") }
-    var customTypeText by remember { mutableStateOf("") }
+    var selectedType by remember {
+        mutableStateOf(
+            if (initialAlert != null) {
+                if (initialAlert.alertType in listOf("ENTRY", "SL", "TP", "LEVEL")) initialAlert.alertType
+                else "CUSTOM"
+            } else "LEVEL"
+        )
+    }
+    var customTypeText by remember {
+        mutableStateOf(
+            if (initialAlert != null && initialAlert.alertType !in listOf("ENTRY", "SL", "TP", "LEVEL")) {
+                initialAlert.alertType
+            } else ""
+        )
+    }
 
     val effectiveType = if (selectedType == "CUSTOM") {
         customTypeText.trim().ifBlank { "CUSTOM" }
@@ -469,9 +544,16 @@ private fun AddAlertSheet(
         selectedType
     }
 
-    // Specific alert sound override (null = auto follows alertType configured ringtone)
-    var customToneUri by remember { mutableStateOf<Uri?>(null) }
-    var customToneName by remember { mutableStateOf<String?>(null) }
+    var customToneUri by remember {
+        mutableStateOf<Uri?>(
+            initialAlert?.ringtoneUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        )
+    }
+    var customToneName by remember {
+        mutableStateOf<String?>(
+            if (initialAlert?.ringtoneUri != null) "Custom sound" else null
+        )
+    }
 
     val pickCustomTone = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -496,7 +578,19 @@ private fun AddAlertSheet(
     val displayToneName = customToneName?.let { "$it (override)" } ?: typeSoundLabel
 
     Column(Modifier.fillMaxWidth().padding(20.dp)) {
-        Text("New ${market.id} Alert", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                if (initialAlert != null) "Edit ${market.id} Alert" else "New ${market.id} Alert",
+                color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold
+            )
+            if (current > 0) {
+                Text("Live: $${fmtPrice(market, current)}", color = Color(0xFFF7A600), fontSize = 13.sp)
+            }
+        }
         Spacer(Modifier.height(14.dp))
 
         // Price Input
@@ -609,9 +703,24 @@ private fun AddAlertSheet(
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
-        ) { Text("Save Alert", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
+        ) {
+            Text(
+                if (initialAlert != null) "Update Alert" else "Save Alert",
+                fontWeight = FontWeight.Bold, fontSize = 15.sp
+            )
+        }
 
-        Spacer(Modifier.height(20.dp))
+        if (onDelete != null) {
+            Spacer(Modifier.height(8.dp))
+            TextButton(
+                onClick = onDelete,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Delete Alert", color = Color(0xFFF6465D), fontSize = 14.sp)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -622,7 +731,6 @@ private fun SoundSettingsSheet(
     onSoundChanged: () -> Unit
 ) {
     val ctx = LocalContext.current
-    var activeTestKey by remember { mutableStateOf<String?>(null) }
 
     Column(Modifier.fillMaxWidth().padding(20.dp)) {
         Text("Alert Sound Settings", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)

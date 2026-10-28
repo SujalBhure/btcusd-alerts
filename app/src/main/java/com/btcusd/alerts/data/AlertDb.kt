@@ -8,6 +8,7 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +38,7 @@ interface AlertDao {
     @Query("SELECT * FROM alerts WHERE active = 1")
     suspend fun active(): List<Alert>
     @Insert suspend fun insert(a: Alert): Long
+    @Update suspend fun update(a: Alert)
     @Delete suspend fun delete(a: Alert)
     @Query("DELETE FROM alerts WHERE id = :id")
     suspend fun deleteById(id: Long)

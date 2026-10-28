@@ -43,8 +43,15 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: Prepare APK files for distribution
+        id: prep
         run: |
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.7.0.apk
+          VERSION="${GITHUB_REF_NAME:-v0.7.1}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            VERSION="v0.7.1"
+          fi
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/btc-alerts-${VERSION}.apk"
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.7.1.apk
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -58,21 +65,23 @@ jobs:
           name: Latest build
           files: |
             app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/btc-alerts-v0.7.0.apk
+            app/build/outputs/apk/release/btc-alerts-v0.7.1.apk
             app/build/outputs/apk/release/app-debug.apk
       - name: Publish version release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.7.0
-          name: v0.7.0 BTC Alerts
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }} BTC Alerts
           body: |
-            ## v0.7.0 — Alert Types, Custom Ringtone Fix & TradingView Chart
-            - **Alert Types:** Set alerts as `ENTRY`, `SL` (Stop Loss), `TP` (Take Profit), `LEVEL`, or Custom text.
-            - **Type-Specific Ringtones:** Configure custom audio per alert type (e.g. sad tone for SL, win sound for TP). Selecting an alert type auto-picks its configured sound.
-            - **Permanent Custom Ringtone Storage:** Audio files are now copied to app-internal storage so permissions never expire after restarts or reboots.
-            - **TradingView Open Chart Button:** Tap "Open Chart" with official TradingView logo from the alarm screen to instantly open the live pair.
-            - **Snooze Options:** Interactive snooze duration selection (5m, 15m, 30m, 1h).
-            - **In-App Updater:** Fixed release endpoint URL so check for updates works reliably.
+            ## ${{ github.ref_name }} — Tap to Edit Alerts
+            - **Tap to Edit:** Tap any alert card (or tap the edit pencil icon) to edit target price, alert type (ENTRY, SL, TP, LEVEL, or custom), frequency, or sound override.
+            - **In-Modal Delete:** Easily delete or update the alert directly from the edit bottom sheet.
+            - **Alert Types & Dedicated Ringtones:** Set distinct tones per alert type (sad ringtone for SL, win sound for TP, etc.).
+            - **Permanent Storage:** Audio files saved in internal storage so permissions never expire.
+            - **TradingView Integration:** Quick "Open Chart" button directly on the alarm screen.
+            - **Snooze Options:** 5m, 15m, 30m, 1h snooze chips.
           files: |
-            app/build/outputs/apk/release/btc-alerts-v0.7.0.apk
+            app/build/outputs/apk/release/btc-alerts-*.apk
             app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/app-debug.apk
