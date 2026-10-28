@@ -20,7 +20,7 @@ import java.io.File
 /** Checks github.com/SujalBhure/btcusd-alerts releases for a newer tag, downloads + prompts install. */
 object UpdateChecker {
     private const val LIST_URL =
-        "https://api.github.com/SujalBhure/btcusd-alerts/releases?per_page=10"
+        "https://api.github.com/repos/SujalBhure/btcusd-alerts/releases?per_page=10"
     private const val PREFS = "btc_settings"
     private const val KEY_SNOOZE = "update_snooze_until"
     private val client = OkHttpClient()

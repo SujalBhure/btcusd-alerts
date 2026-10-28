@@ -3,6 +3,7 @@ name: Build debug APK (phone-friendly)
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
@@ -41,7 +42,11 @@ jobs:
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      - name: Upload APK
+      - name: Prepare APK files for distribution
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.7.0.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: btc-alerts-release
@@ -51,4 +56,23 @@ jobs:
         with:
           tag_name: latest
           name: Latest build
-          files: app/build/outputs/apk/release/app-release.apk
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/btc-alerts-v0.7.0.apk
+            app/build/outputs/apk/release/app-debug.apk
+      - name: Publish version release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.7.0
+          name: v0.7.0 BTC Alerts
+          body: |
+            ## v0.7.0 — Alert Types, Custom Ringtone Fix & TradingView Chart
+            - **Alert Types:** Set alerts as `ENTRY`, `SL` (Stop Loss), `TP` (Take Profit), `LEVEL`, or Custom text.
+            - **Type-Specific Ringtones:** Configure custom audio per alert type (e.g. sad tone for SL, win sound for TP). Selecting an alert type auto-picks its configured sound.
+            - **Permanent Custom Ringtone Storage:** Audio files are now copied to app-internal storage so permissions never expire after restarts or reboots.
+            - **TradingView Open Chart Button:** Tap "Open Chart" with official TradingView logo from the alarm screen to instantly open the live pair.
+            - **Snooze Options:** Interactive snooze duration selection (5m, 15m, 30m, 1h).
+            - **In-App Updater:** Fixed release endpoint URL so check for updates works reliably.
+          files: |
+            app/build/outputs/apk/release/btc-alerts-v0.7.0.apk
+            app/build/outputs/apk/release/app-release.apk
