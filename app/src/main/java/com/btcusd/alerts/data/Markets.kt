@@ -34,3 +34,22 @@ val MARKETS = listOf(
 fun marketOf(id: String): Market = MARKETS.firstOrNull { it.id == id } ?: MARKETS[0]
 
 fun fmtPrice(m: Market, p: Double): String = "%,.${m.decimals}f".format(p)
+
+fun tradingViewSymbol(market: Market): String = when (market.id) {
+    "BTCUSD" -> "BYBIT:BTCUSD"
+    "ETHUSD" -> "BYBIT:ETHUSD"
+    "SOLUSD" -> "BYBIT:SOLUSD"
+    "XAUUSD" -> "OANDA:XAUUSD"
+    "XAGUSD" -> "OANDA:XAGUSD"
+    "TSLA" -> "NASDAQ:TSLA"
+    "NVDA" -> "NASDAQ:NVDA"
+    "GOOGL" -> "NASDAQ:GOOGL"
+    "AMZN" -> "NASDAQ:AMZN"
+    "SPCX" -> "SPCX"
+    else -> market.id
+}
+
+fun tradingViewUrl(market: Market): String {
+    val sym = java.net.URLEncoder.encode(tradingViewSymbol(market), "UTF-8")
+    return "https://www.tradingview.com/chart/?symbol=$sym"
+}

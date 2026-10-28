@@ -24,8 +24,10 @@ data class Alert(
     val active: Boolean = true,
     val snoozeUntilMs: Long = 0L,
     val lastFiredMs: Long = 0L,
-    /** per-alert ringtone content URI string; null = use universal ringtone */
-    val ringtoneUri: String? = null
+    /** per-alert ringtone internal file URI string; null = use alertType or universal ringtone */
+    val ringtoneUri: String? = null,
+    /** Alert type: ENTRY, SL, TP, LEVEL, or user custom string */
+    val alertType: String = "LEVEL"
 )
 
 @Dao
@@ -55,7 +57,13 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [Alert::class], version = 2, exportSchema = false)
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE alerts ADD COLUMN alertType TEXT NOT NULL DEFAULT 'LEVEL'")
+    }
+}
+
+@Database(entities = [Alert::class], version = 3, exportSchema = false)
 abstract class AlertDb : RoomDatabase() {
     abstract fun dao(): AlertDao
 }

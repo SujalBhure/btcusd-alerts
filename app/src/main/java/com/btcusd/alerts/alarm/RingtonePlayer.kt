@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -15,21 +16,23 @@ object RingtonePlayer {
     private var player: MediaPlayer? = null
     private var vibrator: Vibrator? = null
 
-    /** Plays alertRingtone (per-alert) else universal else system alarm, looping + vibration. */
-    fun start(ctx: Context, alertRingtone: android.net.Uri? = null) {
+    /**
+     * Plays alert sound:
+     * 1. alertRingtone (per-alert specific)
+     * 2. alertType sound (e.g. SL, TP, ENTRY, LEVEL)
+     * 3. universal custom ringtone
+     * 4. system alarm default
+     * 5. system ringtone default
+     */
+    fun start(ctx: Context, alertRingtone: Uri? = null, alertType: String? = null) {
         stop()
         val am = ctx.getSystemService(AudioManager::class.java)
         am.setStreamVolume(AudioManager.STREAM_ALARM, am.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0)
-        fun usable(u: android.net.Uri?): android.net.Uri? = u?.let {
-            runCatching {
-                ctx.contentResolver.openInputStream(it)?.close()
-                it
-            }.getOrNull()
-        }
-        val uri = usable(alertRingtone)
-            ?: usable(SoundSettings.getCustomUri(ctx))
+
+        val uri = SoundSettings.resolveEffectiveUri(ctx, alertRingtone?.toString(), alertType)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+
         player = MediaPlayer().apply {
             setAudioAttributes(
                 AudioAttributes.Builder()
@@ -52,6 +55,33 @@ object RingtonePlayer {
             vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
         } else {
             @Suppress("DEPRECATION") vibrator?.vibrate(pattern, 0)
+        }
+    }
+
+    /**
+     * Plays a brief sample/test of a specific sound URI or key.
+     */
+    fun testPlay(ctx: Context, testUri: Uri? = null) {
+        stop()
+        val am = ctx.getSystemService(AudioManager::class.java)
+        am.setStreamVolume(AudioManager.STREAM_ALARM, am.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0)
+
+        val uri = testUri
+            ?: SoundSettings.getSoundUri(ctx, SoundSettings.KEY_UNIVERSAL)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+
+        player = MediaPlayer().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            setDataSource(ctx, uri)
+            isLooping = false
+            prepare()
+            start()
         }
     }
 

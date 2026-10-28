@@ -41,7 +41,7 @@ class PriceMonitorService : LifecycleService() {
         super.onCreate()
         ensureAlertChannel(this)
         db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
-            .addMigrations(MIGRATION_1_2).build()
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTCAlerts:monitor")
             .apply { runCatching { acquire() } }
@@ -166,13 +166,13 @@ class PriceMonitorService : LifecycleService() {
             putExtra("target", target)
             putExtra("price", price)
             putExtra("ringtone", a.ringtoneUri)
+            putExtra("alertType", a.alertType)
         }
         val pi = PendingIntent.getActivity(
             this, a.id.toInt(), full,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val sound = a.ringtoneUri?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
-            ?: SoundSettings.getCustomUri(this)
+        val sound = SoundSettings.resolveEffectiveUri(this, a.ringtoneUri, a.alertType)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val notif = NotificationCompat.Builder(this, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
