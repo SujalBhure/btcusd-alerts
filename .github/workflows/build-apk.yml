@@ -45,13 +45,13 @@ jobs:
       - name: Prepare APK files for distribution
         id: prep
         run: |
-          VERSION="${GITHUB_REF_NAME:-v0.7.1}"
+          VERSION="${GITHUB_REF_NAME:-v0.8.0}"
           if [ "$GITHUB_REF_TYPE" != "tag" ]; then
-            VERSION="v0.7.1"
+            VERSION="v0.8.0"
           fi
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
           cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/btc-alerts-${VERSION}.apk"
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.7.1.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.8.0.apk
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -65,7 +65,7 @@ jobs:
           name: Latest build
           files: |
             app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/btc-alerts-v0.7.1.apk
+            app/build/outputs/apk/release/btc-alerts-v0.8.0.apk
             app/build/outputs/apk/release/app-debug.apk
       - name: Publish version release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -74,13 +74,13 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }} BTC Alerts
           body: |
-            ## ${{ github.ref_name }} — Tap to Edit Alerts
-            - **Tap to Edit:** Tap any alert card (or tap the edit pencil icon) to edit target price, alert type (ENTRY, SL, TP, LEVEL, or custom), frequency, or sound override.
-            - **In-Modal Delete:** Easily delete or update the alert directly from the edit bottom sheet.
-            - **Alert Types & Dedicated Ringtones:** Set distinct tones per alert type (sad ringtone for SL, win sound for TP, etc.).
-            - **Permanent Storage:** Audio files saved in internal storage so permissions never expire.
-            - **TradingView Integration:** Quick "Open Chart" button directly on the alarm screen.
-            - **Snooze Options:** 5m, 15m, 30m, 1h snooze chips.
+            ## ${{ github.ref_name }} — BTC, Gold & Oil Alert Desk
+            - **3 Core Markets Only:** BTCUSD (Bybit Perp), XAUUSD (Gold Spot), and USOIL (WTI Crude Oil).
+            - **Sound Settings Preview & Stop:** Interactive Play/Stop toggle per ringtone row and master Stop button to halt audio immediately.
+            - **Emergency Dismiss Fix:** Dismissing the alarm window immediately stops all ringing, clears vibration, and cancels background notifications.
+            - **Multi-Market Test Ring:** Test ring modal allows simulating live alarms for BTC, Gold, and Oil with verified TradingView chart deep-links.
+            - **TradingView Chart Deep-Links:** Exact exchange pairs: `BYBIT:BTCUSD`, `OANDA:XAUUSD`, and `TVC:USOIL`.
+            - **Candlestick Confirmations & Retests:** Level bounce, Pin Bar (hammer/shooting star), and Engulfing pattern triggers.
           files: |
             app/build/outputs/apk/release/btc-alerts-*.apk
             app/build/outputs/apk/release/app-release.apk

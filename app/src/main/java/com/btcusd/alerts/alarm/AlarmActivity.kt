@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.room.Room
@@ -42,6 +43,8 @@ import com.btcusd.alerts.R
 import com.btcusd.alerts.data.AlertDb
 import com.btcusd.alerts.data.MIGRATION_1_2
 import com.btcusd.alerts.data.MIGRATION_2_3
+import com.btcusd.alerts.data.MIGRATION_3_4
+import com.btcusd.alerts.data.TriggerDetector
 import com.btcusd.alerts.data.fmtPrice
 import com.btcusd.alerts.data.marketOf
 import com.btcusd.alerts.data.tradingViewUrl
@@ -53,7 +56,8 @@ import kotlinx.coroutines.launch
 /**
  * Full-screen incoming-call style alarm. Shows over lock screen,
  * keeps ringing until Dismiss / Snooze. Premium black terminal look.
- * Includes Open Chart (TradingView) button, alert type indicator, and snooze duration options.
+ * Includes Open Chart (TradingView) button, alert type indicator,
+ * pattern/trigger confirmation badge, and snooze duration options.
  */
 class AlarmActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,6 +76,8 @@ class AlarmActivity : ComponentActivity() {
         val price = intent.getDoubleExtra("price", 0.0)
         val ringtoneStr = intent.getStringExtra("ringtone")
         val alertType = intent.getStringExtra("alertType") ?: "LEVEL"
+        val triggerTitle = intent.getStringExtra("triggerTitle")
+        val triggerDesc = intent.getStringExtra("triggerDesc")
         val isTest = intent.getBooleanExtra("test", false)
         val up = price >= target
 
@@ -121,6 +127,18 @@ class AlarmActivity : ComponentActivity() {
                         }
                     }
 
+                    if (triggerTitle != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0x332962FF), RoundedCornerShape(14.dp))
+                                .border(1.dp, Color(0xFF2962FF), RoundedCornerShape(14.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("⚡ $triggerTitle", color = Color(0xFF82B1FF), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
                     Spacer(Modifier.height(16.dp))
                     Text(
                         "$${fmtPrice(m, price)}",
@@ -129,19 +147,36 @@ class AlarmActivity : ComponentActivity() {
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "crossed $${fmtPrice(m, target)}  (${if (up) "▲ ABOVE" else "▼ BELOW"})",
-                        color = if (up) Color(0xFF0ECB81) else Color(0xFFF6465D),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
 
-                    Spacer(Modifier.height(32.dp))
+                    if (triggerDesc != null) {
+                        Text(
+                            triggerDesc,
+                            color = Color(0xFFE0E0E0),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Level target: $${fmtPrice(m, target)}",
+                            color = Color(0xFF9E9E9E),
+                            fontSize = 13.sp
+                        )
+                    } else {
+                        Text(
+                            "crossed $${fmtPrice(m, target)}  (${if (up) "▲ ABOVE" else "▼ BELOW"})",
+                            color = if (up) Color(0xFF0ECB81) else Color(0xFFF6465D),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Spacer(Modifier.height(30.dp))
 
                     // Open Chart (TradingView) button
                     Button(
                         onClick = {
-                            RingtonePlayer.stop()
+                            RingtonePlayer.stop(this@AlarmActivity)
                             val tvUrl = tradingViewUrl(m)
                             runCatching {
                                 val chartIntent = Intent(Intent.ACTION_VIEW, Uri.parse(tvUrl)).apply {
@@ -168,7 +203,7 @@ class AlarmActivity : ComponentActivity() {
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(Modifier.width(10.dp))
-                            Text("Open Chart", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Open ${m.id} in TradingView", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
 
@@ -204,54 +239,61 @@ class AlarmActivity : ComponentActivity() {
                         }
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(16.dp))
 
                     // Action buttons: Dismiss / Snooze
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
                             onClick = {
-                                RingtonePlayer.stop()
+                                RingtonePlayer.stop(this@AlarmActivity)
                                 CoroutineScope(Dispatchers.IO).launch {
                                     runCatching {
                                         val db = Room.databaseBuilder(
                                             this@AlarmActivity, AlertDb::class.java, "alerts.db"
-                                        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+                                        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
                                         if (!isTest && oneShot && alertId != 0L) db.dao().deleteById(alertId)
                                         db.close()
                                     }
                                 }
                                 finish()
                             },
-                            modifier = Modifier.weight(1f).height(52.dp),
-                            shape = RoundedCornerShape(26.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
-                        ) { Text("Dismiss", fontSize = 15.sp) }
+                            modifier = Modifier.weight(1.2f).height(54.dp),
+                            shape = RoundedCornerShape(27.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFF7A600),
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Text("DISMISS ALARM", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
 
                         Button(
                             onClick = {
-                                RingtonePlayer.stop()
+                                RingtonePlayer.stop(this@AlarmActivity)
                                 CoroutineScope(Dispatchers.IO).launch {
                                     runCatching {
                                         val db = Room.databaseBuilder(
                                             this@AlarmActivity, AlertDb::class.java, "alerts.db"
-                                        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+                                        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
                                         if (!isTest && alertId != 0L) {
-                                            db.dao().snooze(alertId, System.currentTimeMillis() + snoozeMins * 60_000L)
+                                             db.dao().snooze(alertId, System.currentTimeMillis() + snoozeMins * 60_000L)
                                         }
                                         db.close()
                                     }
                                 }
                                 finish()
                             },
-                            modifier = Modifier.weight(1f).height(52.dp),
-                            shape = RoundedCornerShape(26.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600))
+                            modifier = Modifier.weight(0.8f).height(54.dp),
+                            shape = RoundedCornerShape(27.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2A3138),
+                                contentColor = Color.White
+                            )
                         ) {
                             Text(
                                 "Snooze ${if (snoozeMins == 60) "1h" else "${snoozeMins}m"}",
-                                color = Color.Black,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -261,7 +303,7 @@ class AlarmActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        RingtonePlayer.stop()
+        RingtonePlayer.stop(this)
         super.onDestroy()
     }
 

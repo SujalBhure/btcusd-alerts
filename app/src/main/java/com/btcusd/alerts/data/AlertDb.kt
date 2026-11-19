@@ -28,7 +28,11 @@ data class Alert(
     /** per-alert ringtone internal file URI string; null = use alertType or universal ringtone */
     val ringtoneUri: String? = null,
     /** Alert type: ENTRY, SL, TP, LEVEL, or user custom string */
-    val alertType: String = "LEVEL"
+    val alertType: String = "LEVEL",
+    /** Trigger condition: CROSS, RETEST, PINBAR, ENGULFING, ANY_TRIGGER */
+    val triggerCondition: String = TriggerDetector.COND_CROSS,
+    /** Candle timeframe for pattern/retest detection: "5", "15", "60", "240" */
+    val timeframe: String = "15"
 )
 
 @Dao
@@ -65,7 +69,14 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-@Database(entities = [Alert::class], version = 3, exportSchema = false)
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE alerts ADD COLUMN triggerCondition TEXT NOT NULL DEFAULT 'CROSS'")
+        db.execSQL("ALTER TABLE alerts ADD COLUMN timeframe TEXT NOT NULL DEFAULT '15'")
+    }
+}
+
+@Database(entities = [Alert::class], version = 4, exportSchema = false)
 abstract class AlertDb : RoomDatabase() {
     abstract fun dao(): AlertDao
 }

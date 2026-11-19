@@ -75,6 +75,8 @@ import com.btcusd.alerts.data.Feed
 import com.btcusd.alerts.data.MARKETS
 import com.btcusd.alerts.data.MIGRATION_1_2
 import com.btcusd.alerts.data.MIGRATION_2_3
+import com.btcusd.alerts.data.MIGRATION_3_4
+import com.btcusd.alerts.data.TriggerDetector
 import com.btcusd.alerts.data.Market
 import com.btcusd.alerts.data.PriceMonitorService
 import com.btcusd.alerts.data.UpdateChecker
@@ -99,7 +101,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .fallbackToDestructiveMigration()
             .build()
 
@@ -125,6 +127,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     var editingAlert by remember { mutableStateOf<Alert?>(null) }
     var showSound by remember { mutableStateOf(false) }
     var soundRefreshKey by remember { mutableIntStateOf(0) }
+    var showTestRing by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
     var downloading by remember { mutableStateOf(false) }
     var showAuto by remember { mutableStateOf(false) }
@@ -181,18 +184,15 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                         Icon(Icons.Default.Settings, contentDescription = "Permissions", tint = Color.White)
                     }
                     Button(
-                        onClick = { showSound = true },
+                        onClick = {
+                            RingtonePlayer.stop(ctx)
+                            showSound = true
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
                         shape = RoundedCornerShape(20.dp)
                     ) { Text("Sound", fontSize = 13.sp) }
                     Button(
-                        onClick = {
-                            val q = quotes["BTCUSD"]
-                            ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply {
-                                putExtra("test", true); putExtra("symbol", "BTCUSD")
-                                putExtra("price", q?.last ?: 0.0); putExtra("target", q?.last ?: 0.0)
-                            })
-                        },
+                        onClick = { showTestRing = true },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
                         shape = RoundedCornerShape(20.dp)
                     ) { Text("Test ring", fontSize = 13.sp) }
@@ -247,7 +247,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     current = quotes[sm.id]?.last ?: 0.0,
                     soundRefreshKey = soundRefreshKey,
                     initialAlert = null,
-                    onSave = { target, tone, onceMode, alertType ->
+                    onSave = { target, tone, onceMode, alertType, triggerCondition, timeframe ->
                         scope.launch(Dispatchers.IO) {
                             db.dao().insert(
                                 Alert(
@@ -256,7 +256,9 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                                     direction = "cross",
                                     oneShot = onceMode,
                                     ringtoneUri = tone,
-                                    alertType = alertType
+                                    alertType = alertType,
+                                    triggerCondition = triggerCondition,
+                                    timeframe = timeframe
                                 )
                             )
                             withContext(Dispatchers.Main) { showSheet = false }
@@ -274,7 +276,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     current = quotes[em.id]?.last ?: 0.0,
                     soundRefreshKey = soundRefreshKey,
                     initialAlert = ea,
-                    onSave = { target, tone, onceMode, alertType ->
+                    onSave = { target, tone, onceMode, alertType, triggerCondition, timeframe ->
                         scope.launch(Dispatchers.IO) {
                             db.dao().update(
                                 ea.copy(
@@ -283,6 +285,8 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                                     oneShot = onceMode,
                                     ringtoneUri = tone,
                                     alertType = alertType,
+                                    triggerCondition = triggerCondition,
+                                    timeframe = timeframe,
                                     active = true
                                 )
                             )
@@ -299,14 +303,51 @@ private fun Home(db: AlertDb, resumeTick: Int) {
             }
         }
         if (showSound) {
-            ModalBottomSheet(onDismissRequest = { showSound = false }, containerColor = Color(0xFF14181D)) {
+            ModalBottomSheet(
+                onDismissRequest = {
+                    RingtonePlayer.stop(ctx)
+                    showSound = false
+                },
+                containerColor = Color(0xFF14181D)
+            ) {
                 SoundSettingsSheet(
                     refreshKey = soundRefreshKey,
                     onPickAudioForKey = { key ->
                         soundKeyToPick = key
                         pickAudio.launch("audio/*")
                     },
-                    onSoundChanged = { soundRefreshKey++ }
+                    onSoundChanged = { soundRefreshKey++ },
+                    onClose = {
+                        RingtonePlayer.stop(ctx)
+                        showSound = false
+                    }
+                )
+            }
+        }
+        if (showTestRing) {
+            ModalBottomSheet(
+                onDismissRequest = { showTestRing = false },
+                containerColor = Color(0xFF14181D)
+            ) {
+                TestRingSheet(
+                    quotes = quotes,
+                    onSelect = { m ->
+                        val q = quotes[m.id]
+                        val fallbackPrice = when (m.id) {
+                            "BTCUSD" -> 62000.0
+                            "XAUUSD" -> 3650.0
+                            "USOIL" -> 83.5
+                            else -> 100.0
+                        }
+                        val price = q?.last ?: fallbackPrice
+                        ctx.startActivity(Intent(ctx, AlarmActivity::class.java).apply {
+                            putExtra("test", true)
+                            putExtra("symbol", m.id)
+                            putExtra("price", price)
+                            putExtra("target", price)
+                        })
+                        showTestRing = false
+                    }
                 )
             }
         }
@@ -468,8 +509,28 @@ private fun AlertRow(
                 ) {
                     Text(a.alertType, color = badgeFg, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
+
+                if (a.triggerCondition != TriggerDetector.COND_CROSS) {
+                    val triggerTag = when (a.triggerCondition) {
+                        TriggerDetector.COND_RETEST -> "RETEST ${a.timeframe}m"
+                        TriggerDetector.COND_PINBAR -> "PIN BAR ${a.timeframe}m"
+                        TriggerDetector.COND_ENGULFING -> "ENGULF ${a.timeframe}m"
+                        TriggerDetector.COND_ANY_TRIGGER -> "TRIGGER ${a.timeframe}m"
+                        else -> a.triggerCondition
+                    }
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0x262962FF), RoundedCornerShape(6.dp))
+                            .border(1.dp, Color(0xFF2962FF), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(triggerTag, color = Color(0xFF82B1FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
                 Text(
-                    "${m.id} cross $${fmtPrice(m, a.targetPrice)}",
+                    if (a.triggerCondition == TriggerDetector.COND_CROSS) "${m.id} cross $${fmtPrice(m, a.targetPrice)}"
+                    else "${m.id} @ $${fmtPrice(m, a.targetPrice)}",
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium
                 )
             }
@@ -481,9 +542,16 @@ private fun AlertRow(
                 val typeUri = SoundSettings.getSoundUri(ctx, typeKey)
                 if (typeUri != null) SoundSettings.getSoundLabel(ctx, typeKey) else "universal"
             }
+            val triggerDesc = when (a.triggerCondition) {
+                TriggerDetector.COND_RETEST -> "retest candle (${a.timeframe}m)"
+                TriggerDetector.COND_PINBAR -> "pin bar confirmation (${a.timeframe}m)"
+                TriggerDetector.COND_ENGULFING -> "engulfing confirmation (${a.timeframe}m)"
+                TriggerDetector.COND_ANY_TRIGGER -> "any trigger confirmation (${a.timeframe}m)"
+                else -> null
+            }
             Text(
                 if (!a.active) "off • tap to edit"
-                else "${if (a.oneShot) "once" else "every time"} • ♪ $soundLabel • tap to edit",
+                else "${if (a.oneShot) "once" else "every time"}${if (triggerDesc != null) " • $triggerDesc" else ""} • ♪ $soundLabel • tap to edit",
                 color = Color(0xFF9E9E9E), fontSize = 13.sp
             )
         }
@@ -506,7 +574,7 @@ private fun AlertSheet(
     current: Double,
     soundRefreshKey: Int,
     initialAlert: Alert? = null,
-    onSave: (Double, String?, Boolean, String) -> Unit,
+    onSave: (Double, String?, Boolean, String, String, String) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
@@ -521,6 +589,13 @@ private fun AlertSheet(
         )
     }
     var once by remember { mutableStateOf(initialAlert?.oneShot ?: true) }
+
+    var selectedTrigger by remember {
+        mutableStateOf(initialAlert?.triggerCondition ?: TriggerDetector.COND_CROSS)
+    }
+    var selectedTf by remember {
+        mutableStateOf(initialAlert?.timeframe ?: "15")
+    }
 
     var selectedType by remember {
         mutableStateOf(
@@ -605,6 +680,121 @@ private fun AlertSheet(
 
         Spacer(Modifier.height(14.dp))
 
+        // Trigger Condition Selector
+        Text("Trigger Condition", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(6.dp))
+        val triggerOptions = listOf(
+            Triple(TriggerDetector.COND_CROSS, "Cross", "Instant"),
+            Triple(TriggerDetector.COND_RETEST, "Retest", "Level bounce"),
+            Triple(TriggerDetector.COND_PINBAR, "Pin Bar", "Hammer / Star"),
+            Triple(TriggerDetector.COND_ENGULFING, "Engulfing", "Reversal"),
+            Triple(TriggerDetector.COND_ANY_TRIGGER, "Any Trigger", "All confirmations")
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            triggerOptions.take(3).forEach { (cond, label, _) ->
+                val isSelected = selectedTrigger == cond
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            if (isSelected) Color(0xFF2962FF) else Color(0xFF2A3138),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { selectedTrigger = cond }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            triggerOptions.drop(3).forEach { (cond, label, _) ->
+                val isSelected = selectedTrigger == cond
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            if (isSelected) Color(0xFF2962FF) else Color(0xFF2A3138),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { selectedTrigger = cond }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+
+        // Timeframe selector if condition requires candles
+        if (selectedTrigger != TriggerDetector.COND_CROSS) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Confirmation Timeframe", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Evaluated on close", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+            }
+            Spacer(Modifier.height(6.dp))
+            val tfOptions = listOf("5" to "5m", "15" to "15m", "60" to "1h", "240" to "4h")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                tfOptions.forEach { (tfVal, tfLabel) ->
+                    val isSelected = selectedTf == tfVal
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                if (isSelected) Color(0xFFF7A600) else Color(0xFF2A3138),
+                                RoundedCornerShape(16.dp)
+                            )
+                            .clickable { selectedTf = tfVal }
+                            .padding(vertical = 7.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            tfLabel,
+                            color = if (isSelected) Color.Black else Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            val triggerHelp = when (selectedTrigger) {
+                TriggerDetector.COND_RETEST -> "🔄 Alerts when a ${selectedTf}m candle tests and holds/bounces at this level."
+                TriggerDetector.COND_PINBAR -> "🎯 Alerts when a Hammer or Shooting Star prints at this level with a long rejection wick."
+                TriggerDetector.COND_ENGULFING -> "⚡ Alerts when a Bullish or Bearish Engulfing reversal candle forms at this level."
+                TriggerDetector.COND_ANY_TRIGGER -> "🔥 Alerts when ANY confirmation (Pin Bar, Engulfing, or Retest) forms at this level."
+                else -> ""
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E2329), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(triggerHelp, color = Color(0xFFB0B0B0), fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+
         // Alert Type Chips
         Text("Alert Type", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(6.dp))
@@ -665,7 +855,7 @@ private fun AlertSheet(
             }
         }
         Text(
-            if (once) "Rings once, auto-deletes on dismiss." else "Rings on every crossing until you delete it.",
+            if (once) "Rings once, auto-deletes on dismiss." else "Rings on every trigger until you delete it.",
             color = Color(0xFF9E9E9E), fontSize = 12.sp
         )
 
@@ -697,7 +887,7 @@ private fun AlertSheet(
         Button(
             onClick = {
                 text.toDoubleOrNull()?.let {
-                    onSave(it, customToneUri?.toString(), once, effectiveType)
+                    onSave(it, customToneUri?.toString(), once, effectiveType, selectedTrigger, selectedTf)
                 }
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -728,37 +918,58 @@ private fun AlertSheet(
 private fun SoundSettingsSheet(
     refreshKey: Int,
     onPickAudioForKey: (String) -> Unit,
-    onSoundChanged: () -> Unit
+    onSoundChanged: () -> Unit,
+    onClose: () -> Unit
 ) {
     val ctx = LocalContext.current
+    val isAnyPlaying = RingtonePlayer.isPlaying
 
     Column(Modifier.fillMaxWidth().padding(20.dp)) {
-        Text("Alert Sound Settings", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Configure default universal alarm or specific ringtones per alert type (e.g., sad tone for SL). Sounds are saved permanently.",
-            color = Color(0xFF9E9E9E), fontSize = 13.sp
-        )
-        Spacer(Modifier.height(16.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Alert Sound Settings", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Configure tones per alert type. Saved permanently.",
+                    color = Color(0xFF9E9E9E), fontSize = 12.sp
+                )
+            }
+            if (isAnyPlaying) {
+                Button(
+                    onClick = { RingtonePlayer.stop(ctx) },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF6465D), contentColor = Color.White)
+                ) {
+                    Text("⏹ Stop Sound", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
 
         LazyColumn(Modifier.weight(1f, fill = false)) {
             // 1. Universal Sound
             item {
                 SoundItemRow(
+                    tag = SoundSettings.KEY_UNIVERSAL,
                     title = "Universal Ringtone",
                     subtitle = "Used when no type-specific sound is configured",
                     currentLabel = SoundSettings.label(ctx),
                     badgeColor = Color(0xFFF7A600),
                     isCustom = SoundSettings.getSoundUri(ctx, SoundSettings.KEY_UNIVERSAL) != null,
+                    isPlaying = RingtonePlayer.isPlaying && RingtonePlayer.activeTag == SoundSettings.KEY_UNIVERSAL,
                     onPick = { onPickAudioForKey(SoundSettings.KEY_UNIVERSAL) },
                     onReset = {
                         SoundSettings.clearSound(ctx, SoundSettings.KEY_UNIVERSAL)
-                        RingtonePlayer.stop()
+                        RingtonePlayer.stop(ctx)
                         onSoundChanged()
                     },
-                    onTest = {
+                    onTogglePlay = {
                         val uri = SoundSettings.getSoundUri(ctx, SoundSettings.KEY_UNIVERSAL)
-                        RingtonePlayer.testPlay(ctx, uri)
+                        RingtonePlayer.testPlay(ctx, uri, SoundSettings.KEY_UNIVERSAL)
                     }
                 )
                 HorizontalDivider(color = Color.White.copy(alpha = 0.08f), thickness = 1.dp, modifier = Modifier.padding(vertical = 10.dp))
@@ -766,14 +977,14 @@ private fun SoundSettingsSheet(
 
             // 2. Alert Types
             item {
-                Text("Sounds by Alert Type", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(10.dp))
+                Text("Sounds by Alert Type", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(8.dp))
             }
 
             val typeConfigs = listOf(
-                Triple("SL", "Stop Loss (e.g. sad tone)", Color(0xFFF6465D)),
-                Triple("TP", "Take Profit (e.g. cash tone)", Color(0xFF0ECB81)),
-                Triple("ENTRY", "Entry (e.g. horn/alert)", Color(0xFF2962FF)),
+                Triple("SL", "Stop Loss alert", Color(0xFFF6465D)),
+                Triple("TP", "Take Profit alert", Color(0xFF0ECB81)),
+                Triple("ENTRY", "Entry trigger", Color(0xFF2962FF)),
                 Triple("LEVEL", "Key Level crossed", Color(0xFFF7A600))
             )
 
@@ -781,49 +992,70 @@ private fun SoundSettingsSheet(
                 val key = SoundSettings.keyForType(type)
                 val uri = SoundSettings.getSoundUri(ctx, key)
                 val label = SoundSettings.getSoundLabel(ctx, key)
+                val isThisPlaying = RingtonePlayer.isPlaying && RingtonePlayer.activeTag == key
 
                 SoundItemRow(
+                    tag = key,
                     title = "$type Alert",
                     subtitle = desc,
                     currentLabel = label,
                     badgeColor = color,
                     isCustom = uri != null,
+                    isPlaying = isThisPlaying,
                     onPick = { onPickAudioForKey(key) },
                     onReset = {
                         SoundSettings.clearSound(ctx, key)
-                        RingtonePlayer.stop()
+                        RingtonePlayer.stop(ctx)
                         onSoundChanged()
                     },
-                    onTest = {
+                    onTogglePlay = {
                         val testUri = uri ?: SoundSettings.getSoundUri(ctx, SoundSettings.KEY_UNIVERSAL)
-                        RingtonePlayer.testPlay(ctx, testUri)
+                        RingtonePlayer.testPlay(ctx, testUri, key)
                     }
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = { RingtonePlayer.stop() },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(24.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
-        ) { Text("Stop sound playback") }
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = { RingtonePlayer.stop(ctx) },
+                modifier = Modifier.weight(1f).height(48.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isAnyPlaying) Color(0xFFF6465D) else Color(0xFF2A3138),
+                    contentColor = Color.White
+                )
+            ) {
+                Text(if (isAnyPlaying) "⏹ Stop Sound" else "Stop Audio", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = onClose,
+                modifier = Modifier.weight(1f).height(48.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
+            ) {
+                Text("Done", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
         Spacer(Modifier.height(16.dp))
     }
 }
 
 @Composable
 private fun SoundItemRow(
+    tag: String,
     title: String,
     subtitle: String,
     currentLabel: String,
     badgeColor: Color,
     isCustom: Boolean,
+    isPlaying: Boolean,
     onPick: () -> Unit,
     onReset: () -> Unit,
-    onTest: () -> Unit
+    onTogglePlay: () -> Unit
 ) {
     Row(
         Modifier.fillMaxWidth().background(Color(0xFF14181D), RoundedCornerShape(12.dp)).padding(12.dp),
@@ -840,15 +1072,24 @@ private fun SoundItemRow(
             Text(currentLabel, color = if (isCustom) badgeColor else Color(0xFFB0B0B0), fontSize = 13.sp, maxLines = 1)
             Text(subtitle, color = Color(0xFF6E6E6E), fontSize = 11.sp, maxLines = 1)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onTest, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Test sound", tint = Color.White)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = onTogglePlay,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isPlaying) Color(0xFFF6465D) else Color(0xFF2A3138),
+                    contentColor = Color.White
+                ),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(if (isPlaying) "⏹ Stop" else "▶ Test", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
+
             Button(
                 onClick = onPick,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp)
             ) { Text("Set", fontSize = 12.sp) }
 
             if (isCustom) {
@@ -857,6 +1098,62 @@ private fun SoundItemRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TestRingSheet(
+    quotes: Map<String, Feed.Quote>,
+    onSelect: (Market) -> Unit
+) {
+    Column(Modifier.fillMaxWidth().padding(20.dp)) {
+        Text("Test Ring Alert", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Select an asset to test the emergency alert screen and TradingView chart links.",
+            color = Color(0xFF9E9E9E), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(16.dp))
+
+        MARKETS.forEach { m ->
+            val q = quotes[m.id]
+            val priceStr = if (q != null && q.last > 0) "$${fmtPrice(m, q.last)}" else "—"
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E2329), RoundedCornerShape(14.dp))
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(Color(m.badgeBg), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(m.badge, color = Color(m.badgeFg), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Column {
+                        Text(m.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(m.desc, color = Color(0xFF9E9E9E), fontSize = 12.sp)
+                        Text(priceStr, color = Color(0xFF0ECB81), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+
+                Button(
+                    onClick = { onSelect(m) },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
+                ) {
+                    Text("🔔 Test", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 

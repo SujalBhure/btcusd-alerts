@@ -24,8 +24,11 @@ import okhttp3.WebSocket
 /**
  * Sticky foreground service: watches every market that has an active alert.
  * Bybit inverse markets share one WebSocket; Delta markets are REST-polled.
- * Fires on CROSSING (either direction), rings via full-screen notification
- * even with app closed / screen locked.
+ *
+ * Supports:
+ * 1. Real-time Crossing alerts (instant on tick).
+ * 2. Candle-based Entry Triggers & Retests (Pin Bar, Engulfing, Retest, Any Trigger)
+ *    evaluated on candle close for selected timeframes (5m, 15m, 1h, 4h).
  */
 class PriceMonitorService : LifecycleService() {
 
@@ -33,15 +36,17 @@ class PriceMonitorService : LifecycleService() {
     private var ws: WebSocket? = null
     private var watchJob: Job? = null
     private var pollJob: Job? = null
+    private var candleJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val prev = mutableMapOf<String, Double>()
     private val lastTick = mutableMapOf<String, Long>()
+    private val lastFiredCandleMs = mutableMapOf<Long, Long>()
 
     override fun onCreate() {
         super.onCreate()
         ensureAlertChannel(this)
         db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTCAlerts:monitor")
             .apply { runCatching { acquire() } }
@@ -49,6 +54,7 @@ class PriceMonitorService : LifecycleService() {
         lifecycleScope.launch { refreshFeeds() }
         startWatchdog()
         startPollLoop()
+        startCandleWatcher()
     }
 
     private fun persistentNotification(): Notification {
@@ -135,6 +141,56 @@ class PriceMonitorService : LifecycleService() {
         }
     }
 
+    /**
+     * Watches closed candles for active alerts with candle conditions (RETEST, PINBAR, ENGULFING, ANY_TRIGGER).
+     * Evaluates on the latest closed candle to prevent repainting/false triggers.
+     */
+    private fun startCandleWatcher() {
+        candleJob?.cancel()
+        candleJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(12_000)
+                runCatching {
+                    val activeCandleAlerts = db.dao().active().filter {
+                        it.triggerCondition != TriggerDetector.COND_CROSS
+                    }
+                    if (activeCandleAlerts.isEmpty()) return@runCatching
+
+                    val grouped = activeCandleAlerts.groupBy { it.symbol to it.timeframe }
+                    for ((key, alerts) in grouped) {
+                        val (symbol, tf) = key
+                        val market = marketOf(symbol)
+                        val candles = Feed.candles(market, interval = tf, limit = 5)
+                        if (candles.size < 2) continue
+
+                        // candles.last() is forming/open; candles[candles.size - 2] is completed/closed
+                        val closed = candles[candles.size - 2]
+                        val prev = candles.getOrNull(candles.size - 3)
+                        val now = System.currentTimeMillis()
+
+                        for (a in alerts) {
+                            if (now < a.snoozeUntilMs) continue
+                            if (now - a.lastFiredMs < 60_000) continue
+                            if (lastFiredCandleMs[a.id] == closed.startMs) continue
+
+                            val match = TriggerDetector.evaluate(a.triggerCondition, closed, prev, a.targetPrice)
+                            if (match != null) {
+                                lastFiredCandleMs[a.id] = closed.startMs
+                                db.dao().markFired(a.id, now)
+                                fireAlarm(
+                                    a = a,
+                                    price = closed.close,
+                                    triggerTitle = "${match.title} (${a.timeframe}m)",
+                                    triggerDesc = match.description
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private suspend fun onTick(marketId: String, price: Double) {
         val p = prev[marketId]
         prev[marketId] = price
@@ -142,6 +198,8 @@ class PriceMonitorService : LifecycleService() {
         if (p == null || p <= 0) return
         val now = System.currentTimeMillis()
         for (a in db.dao().active().filter { it.symbol == marketId }) {
+            // Candle-based triggers (RETEST, PINBAR, ENGULFING, ANY_TRIGGER) are checked in candleWatcher
+            if (a.triggerCondition != TriggerDetector.COND_CROSS) continue
             if (now < a.snoozeUntilMs) continue
             if (now - a.lastFiredMs < 60_000) continue
             val d1 = p - a.targetPrice
@@ -154,7 +212,12 @@ class PriceMonitorService : LifecycleService() {
         }
     }
 
-    private fun fireAlarm(a: Alert, price: Double) {
+    private fun fireAlarm(
+        a: Alert,
+        price: Double,
+        triggerTitle: String? = null,
+        triggerDesc: String? = null
+    ) {
         ensureAlertChannel(this)
         val target = a.targetPrice
         val m = marketOf(a.symbol)
@@ -167,6 +230,10 @@ class PriceMonitorService : LifecycleService() {
             putExtra("price", price)
             putExtra("ringtone", a.ringtoneUri)
             putExtra("alertType", a.alertType)
+            putExtra("triggerTitle", triggerTitle)
+            putExtra("triggerDesc", triggerDesc)
+            putExtra("triggerCondition", a.triggerCondition)
+            putExtra("timeframe", a.timeframe)
         }
         val pi = PendingIntent.getActivity(
             this, a.id.toInt(), full,
@@ -174,10 +241,23 @@ class PriceMonitorService : LifecycleService() {
         )
         val sound = SoundSettings.resolveEffectiveUri(this, a.ringtoneUri, a.alertType)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+
+        val notifTitle = if (triggerTitle != null) {
+            "${m.id} • $triggerTitle"
+        } else {
+            "${m.id} crossed $${fmtPrice(m, target)}"
+        }
+
+        val notifText = if (triggerDesc != null) {
+            "$triggerDesc • Now $${fmtPrice(m, price)}"
+        } else {
+            "Now $${fmtPrice(m, price)} • Tap to open"
+        }
+
         val notif = NotificationCompat.Builder(this, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("${m.id} crossed $${fmtPrice(m, target)}")
-            .setContentText("Now $${fmtPrice(m, price)} • Tap to open")
+            .setContentTitle(notifTitle)
+            .setContentText(notifText)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setFullScreenIntent(pi, true)
@@ -200,6 +280,7 @@ class PriceMonitorService : LifecycleService() {
         runCatching { ws?.cancel() }
         watchJob?.cancel()
         pollJob?.cancel()
+        candleJob?.cancel()
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         super.onDestroy()
     }
