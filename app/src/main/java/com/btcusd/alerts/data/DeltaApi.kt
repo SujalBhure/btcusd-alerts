@@ -48,11 +48,14 @@ object DeltaApi {
                     if (r.optString("s") != "ok") return@withContext emptyList()
                     val t = r.getJSONArray("t"); val o = r.getJSONArray("o")
                     val h = r.getJSONArray("h"); val l = r.getJSONArray("l"); val c = r.getJSONArray("c")
+                    val v = r.optJSONArray("v")
                     val n = minOf(t.length(), o.length(), h.length(), l.length(), c.length())
                     List(n) { i ->
+                        val vol = if (v != null && i < v.length()) v.optDouble(i, 0.0) else 0.0
                         BybitApi.Candle(
                             t.getLong(i) * 1000,
-                            o.getDouble(i), h.getDouble(i), l.getDouble(i), c.getDouble(i)
+                            o.getDouble(i), h.getDouble(i), l.getDouble(i), c.getDouble(i),
+                            vol
                         )
                     }.takeLast(limit)
                 }

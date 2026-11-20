@@ -22,7 +22,7 @@ object BybitApi {
     private val client = OkHttpClient()
 
     data class Ticker(val lastPrice: Double, val prev24h: Double, val price24hPcnt: Double, val high24h: Double, val low24h: Double)
-    data class Candle(val startMs: Long, val open: Double, val high: Double, val low: Double, val close: Double)
+    data class Candle(val startMs: Long, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Double = 0.0)
 
     suspend fun fetchTicker(): Ticker? = tickerFor("BTCUSD")
 
@@ -55,7 +55,8 @@ object BybitApi {
                     val arr = obj.getJSONObject("result").getJSONArray("list")
                     List(arr.length()) { i ->
                         val c = arr.getJSONArray(i)
-                        Candle(c.getString(0).toLong(), c.getString(1).toDouble(), c.getString(2).toDouble(), c.getString(3).toDouble(), c.getString(4).toDouble())
+                        val vol = c.optString(5, "0").toDoubleOrNull() ?: 0.0
+                        Candle(c.getString(0).toLong(), c.getString(1).toDouble(), c.getString(2).toDouble(), c.getString(3).toDouble(), c.getString(4).toDouble(), vol)
                     }.reversed()
                 }
             }.getOrDefault(emptyList())

@@ -25,4 +25,38 @@ object Feed {
             is Market.Kind.Delta -> DeltaApi.klines(k.symbol, interval, limit)
             is Market.Kind.Swissquote -> DeltaApi.klines(k.proxyDeltaSymbol, interval, limit)
         }
+
+    fun calculateVwap(candles: List<BybitApi.Candle>): Double {
+        if (candles.isEmpty()) return 0.0
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val sodMs = cal.timeInMillis
+        var sessionCandles = candles.filter { it.startMs >= sodMs }
+        if (sessionCandles.size < 3) {
+            sessionCandles = if (candles.size >= 24) candles.takeLast(24) else candles
+        }
+        var totalVp = 0.0
+        var totalVol = 0.0
+        var totalTp = 0.0
+        for (c in sessionCandles) {
+            val tp = (c.high + c.low + c.close) / 3.0
+            totalTp += tp
+            if (c.volume > 0.0) {
+                totalVp += tp * c.volume
+                totalVol += c.volume
+            }
+        }
+        return if (totalVol > 0.0) totalVp / totalVol
+        else if (sessionCandles.isNotEmpty()) totalTp / sessionCandles.size
+        else candles.last().close
+    }
+
+    suspend fun vwap(m: Market): Double {
+        val cdls = candles(m, interval = "15", limit = 96)
+        return calculateVwap(cdls)
+    }
 }

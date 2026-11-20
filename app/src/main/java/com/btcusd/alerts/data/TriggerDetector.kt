@@ -15,8 +15,14 @@ object TriggerDetector {
 
     const val COND_CROSS = "CROSS"
     const val COND_RETEST = "RETEST"
+    const val COND_RETEST_BOUNCE = "RETEST_BOUNCE"
+    const val COND_RETEST_REJECT = "RETEST_REJECT"
     const val COND_PINBAR = "PINBAR"
+    const val COND_PINBAR_BULL = "PINBAR_BULL"
+    const val COND_PINBAR_BEAR = "PINBAR_BEAR"
     const val COND_ENGULFING = "ENGULFING"
+    const val COND_ENGULF_BULL = "ENGULF_BULL"
+    const val COND_ENGULF_BEAR = "ENGULF_BEAR"
     const val COND_ANY_TRIGGER = "ANY_TRIGGER"
 
     data class TriggerMatch(
@@ -39,8 +45,9 @@ object TriggerDetector {
     /**
      * Detects Pin Bar (Hammer or Shooting Star) at or testing the target level.
      * Rejection shadow must be >= 55% of total candle range with small body (<= 35%).
+     * specific: "BULL" for hammer only, "BEAR" for shooting star only, null for either.
      */
-    fun checkPinBar(c: BybitApi.Candle, target: Double): TriggerMatch? {
+    fun checkPinBar(c: BybitApi.Candle, target: Double, specific: String? = null): TriggerMatch? {
         val totalRange = c.high - c.low
         if (totalRange <= 0.0) return null
         if (!testsLevel(c, target)) return null
@@ -51,7 +58,7 @@ object TriggerDetector {
 
         // Bullish Pin Bar (Hammer) - long lower wick rejecting lower prices
         if (lowerShadow >= 0.55 * totalRange && body <= 0.35 * totalRange && upperShadow <= 0.25 * totalRange) {
-            // Lower wick tested/pierced the target level
+            if (specific == "BEAR") return null
             return TriggerMatch(
                 title = "Bullish Pin Bar (Hammer)",
                 description = "Long lower rejection wick (${(lowerShadow / totalRange * 100).toInt()}%) tested level",
@@ -61,7 +68,7 @@ object TriggerDetector {
 
         // Bearish Pin Bar (Shooting Star) - long upper wick rejecting higher prices
         if (upperShadow >= 0.55 * totalRange && body <= 0.35 * totalRange && lowerShadow <= 0.25 * totalRange) {
-            // Upper wick tested/pierced the target level
+            if (specific == "BULL") return null
             return TriggerMatch(
                 title = "Bearish Pin Bar (Shooting Star)",
                 description = "Long upper rejection wick (${(upperShadow / totalRange * 100).toInt()}%) tested level",
@@ -74,8 +81,9 @@ object TriggerDetector {
 
     /**
      * Detects Bullish or Bearish Engulfing candle at the target level.
+     * specific: "BULL" for bullish engulfing only, "BEAR" for bearish engulfing only, null for either.
      */
-    fun checkEngulfing(c: BybitApi.Candle, prev: BybitApi.Candle?, target: Double): TriggerMatch? {
+    fun checkEngulfing(c: BybitApi.Candle, prev: BybitApi.Candle?, target: Double, specific: String? = null): TriggerMatch? {
         if (prev == null) return null
         if (!testsLevel(c, target)) return null
 
@@ -88,6 +96,7 @@ object TriggerDetector {
         if (prevBearish && currBullish) {
             // Bullish Engulfing: green candle body engulfs previous red candle body
             if (c.close >= prev.open * 0.999 && c.open <= prev.close * 1.001) {
+                if (specific == "BEAR") return null
                 return TriggerMatch(
                     title = "Bullish Engulfing",
                     description = "Bullish body fully engulfed prior red candle at level",
@@ -101,6 +110,7 @@ object TriggerDetector {
         if (prevBullish && currBearish) {
             // Bearish Engulfing: red candle body engulfs previous green candle body
             if (c.close <= prev.open * 1.001 && c.open >= prev.close * 0.999) {
+                if (specific == "BULL") return null
                 return TriggerMatch(
                     title = "Bearish Engulfing",
                     description = "Bearish body fully engulfed prior green candle at level",
@@ -115,8 +125,9 @@ object TriggerDetector {
     /**
      * Detects Level Retest:
      * Candle tested the target level and closed holding/reversing from it.
+     * specific: "BULL" for bounce, "BEAR" for rejection, null for either.
      */
-    fun checkRetest(c: BybitApi.Candle, target: Double): TriggerMatch? {
+    fun checkRetest(c: BybitApi.Candle, target: Double, specific: String? = null): TriggerMatch? {
         if (!testsLevel(c, target)) return null
 
         val totalRange = c.high - c.low
@@ -126,6 +137,7 @@ object TriggerDetector {
         if (c.low <= target * 1.0015 && c.close >= target * 0.9985) {
             val bounced = c.close > c.open || (c.close - c.low) > 0.4 * totalRange
             if (bounced) {
+                if (specific == "BEAR") return null
                 return TriggerMatch(
                     title = "Support Retest & Bounce",
                     description = "Level tested as support; closed above with bounce",
@@ -138,6 +150,7 @@ object TriggerDetector {
         if (c.high >= target * 0.9985 && c.close <= target * 1.0015) {
             val rejected = c.close < c.open || (c.high - c.close) > 0.4 * totalRange
             if (rejected) {
+                if (specific == "BULL") return null
                 return TriggerMatch(
                     title = "Resistance Retest & Rejection",
                     description = "Level tested as resistance; closed below with rejection",
@@ -162,10 +175,17 @@ object TriggerDetector {
         prevCandle: BybitApi.Candle?,
         targetPrice: Double
     ): TriggerMatch? {
-        return when (condition.uppercase()) {
+        val c = condition.uppercase()
+        return when (c) {
             COND_PINBAR -> checkPinBar(candle, targetPrice)
+            COND_PINBAR_BULL -> checkPinBar(candle, targetPrice, specific = "BULL")
+            COND_PINBAR_BEAR -> checkPinBar(candle, targetPrice, specific = "BEAR")
             COND_ENGULFING -> checkEngulfing(candle, prevCandle, targetPrice)
+            COND_ENGULF_BULL -> checkEngulfing(candle, prevCandle, targetPrice, specific = "BULL")
+            COND_ENGULF_BEAR -> checkEngulfing(candle, prevCandle, targetPrice, specific = "BEAR")
             COND_RETEST -> checkRetest(candle, targetPrice)
+            COND_RETEST_BOUNCE -> checkRetest(candle, targetPrice, specific = "BULL")
+            COND_RETEST_REJECT -> checkRetest(candle, targetPrice, specific = "BEAR")
             COND_ANY_TRIGGER -> {
                 // Priority: Pin Bar > Engulfing > Retest
                 checkPinBar(candle, targetPrice)

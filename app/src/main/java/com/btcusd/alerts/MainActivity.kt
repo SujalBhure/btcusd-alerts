@@ -519,6 +519,12 @@ private fun AlertRow(
                 val condShorts = trigConds.map {
                     when (it) {
                         TriggerDetector.COND_CROSS -> "CROSS"
+                        TriggerDetector.COND_PINBAR_BULL -> "BULL_PIN"
+                        TriggerDetector.COND_PINBAR_BEAR -> "BEAR_PIN"
+                        TriggerDetector.COND_ENGULF_BULL -> "BULL_ENGULF"
+                        TriggerDetector.COND_ENGULF_BEAR -> "BEAR_ENGULF"
+                        TriggerDetector.COND_RETEST_BOUNCE -> "BOUNCE"
+                        TriggerDetector.COND_RETEST_REJECT -> "REJECT"
                         TriggerDetector.COND_PINBAR -> "PINBAR"
                         TriggerDetector.COND_ENGULFING -> "ENGULF"
                         TriggerDetector.COND_RETEST -> "RETEST"
@@ -539,8 +545,11 @@ private fun AlertRow(
                     }
                 }
 
+                val isVwap = a.targetPrice <= 0.0
+                val targetLabel = if (isVwap) "${m.id} @ ⚡ VWAP" else "${m.id} @ $${fmtPrice(m, a.targetPrice)}"
+
                 Text(
-                    "${m.id} @ $${fmtPrice(m, a.targetPrice)}",
+                    targetLabel,
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium
                 )
             }
@@ -555,9 +564,10 @@ private fun AlertRow(
             val triggerDesc = if (hasCandle || isMulti) {
                 "$condShorts ($tfDisplay)"
             } else null
+            val vwapDesc = if (a.targetPrice <= 0.0) "dynamic VWAP • " else ""
             Text(
                 if (!a.active) "off • tap to edit"
-                else "${if (a.oneShot) "once" else "every time"}${if (triggerDesc != null) " • $triggerDesc" else ""} • ♪ $soundLabel • tap to edit",
+                else "$vwapDesc${if (a.oneShot) "once" else "every time"}${if (triggerDesc != null) " • $triggerDesc" else ""} • ♪ $soundLabel • tap to edit",
                 color = Color(0xFF9E9E9E), fontSize = 13.sp
             )
         }
@@ -584,9 +594,12 @@ private fun AlertSheet(
     onDelete: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
+    val isInitialVwap = initialAlert?.let { it.targetPrice <= 0.0 } ?: false
+    var isVwap by remember { mutableStateOf(isInitialVwap) }
     var text by remember {
         mutableStateOf(
-            if (initialAlert != null) {
+            if (isInitialVwap) "VWAP"
+            else if (initialAlert != null) {
                 if (initialAlert.targetPrice % 1.0 == 0.0) initialAlert.targetPrice.toLong().toString()
                 else initialAlert.targetPrice.toString()
             } else if (current > 0) {
@@ -682,12 +695,70 @@ private fun AlertSheet(
         // Price Input
         OutlinedTextField(
             value = text,
-            onValueChange = { text = it.filter { c -> c.isDigit() || c == '.' } },
+            onValueChange = {
+                isVwap = false
+                text = it.filter { c -> c.isDigit() || c == '.' }
+            },
             label = { Text("Target price (${market.id})") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(Modifier.height(8.dp))
+
+        // VWAP Quick Controls
+        val coroutineScope = rememberCoroutineScope()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Track Dynamic VWAP button
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(
+                        if (isVwap) Color(0xFF2962FF) else Color(0xFF2A3138),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .clickable {
+                        isVwap = !isVwap
+                        if (isVwap) text = "VWAP"
+                        else if (text == "VWAP") text = if (current > 0) "${current.toInt()}" else ""
+                    }
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "⚡ Track Dynamic VWAP",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = if (isVwap) FontWeight.Bold else FontWeight.Normal
+                )
+            }
+
+            // Quick Fill live VWAP button
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(Color(0xFF2A3138), RoundedCornerShape(12.dp))
+                    .clickable {
+                        coroutineScope.launch {
+                            val v = Feed.vwap(market)
+                            if (v > 0) {
+                                isVwap = false
+                                text = if (v % 1.0 == 0.0) v.toLong().toString() else "%.2f".format(v)
+                            }
+                        }
+                    }
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Set to Live VWAP",
+                    color = Color(0xFFF7A600),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
 
         Spacer(Modifier.height(14.dp))
 
@@ -701,15 +772,23 @@ private fun AlertSheet(
             Text("Tap to combine multiple", color = Color(0xFF82B1FF), fontSize = 12.sp)
         }
         Spacer(Modifier.height(6.dp))
-        val triggerOptions = listOf(
+        val row1Options = listOf(
             Triple(TriggerDetector.COND_CROSS, "Cross", "Instant"),
-            Triple(TriggerDetector.COND_RETEST, "Retest", "Level bounce"),
-            Triple(TriggerDetector.COND_PINBAR, "Pin Bar", "Hammer / Star"),
-            Triple(TriggerDetector.COND_ENGULFING, "Engulfing", "Reversal"),
-            Triple(TriggerDetector.COND_ANY_TRIGGER, "Any Pattern", "All confirmations")
+            Triple(TriggerDetector.COND_PINBAR_BULL, "Bullish Pin", "Hammer"),
+            Triple(TriggerDetector.COND_PINBAR_BEAR, "Bearish Pin", "Star")
         )
+        val row2Options = listOf(
+            Triple(TriggerDetector.COND_ENGULF_BULL, "Bull Engulf", "Bullish"),
+            Triple(TriggerDetector.COND_ENGULF_BEAR, "Bear Engulf", "Bearish"),
+            Triple(TriggerDetector.COND_ANY_TRIGGER, "Any Pattern", "All")
+        )
+        val row3Options = listOf(
+            Triple(TriggerDetector.COND_RETEST_BOUNCE, "Retest Bounce", "Support"),
+            Triple(TriggerDetector.COND_RETEST_REJECT, "Retest Reject", "Resistance")
+        )
+
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            triggerOptions.take(3).forEach { (cond, label, _) ->
+            row1Options.forEach { (cond, label, _) ->
                 val isSelected = cond in selectedTriggers
                 Box(
                     modifier = Modifier
@@ -739,7 +818,37 @@ private fun AlertSheet(
         }
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            triggerOptions.drop(3).forEach { (cond, label, _) ->
+            row2Options.forEach { (cond, label, _) ->
+                val isSelected = cond in selectedTriggers
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            if (isSelected) Color(0xFF2962FF) else Color(0xFF2A3138),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable {
+                            selectedTriggers = if (isSelected) {
+                                if (selectedTriggers.size > 1) selectedTriggers - cond else selectedTriggers
+                            } else {
+                                selectedTriggers + cond
+                            }
+                        }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            row3Options.forEach { (cond, label, _) ->
                 val isSelected = cond in selectedTriggers
                 Box(
                     modifier = Modifier
@@ -822,6 +931,12 @@ private fun AlertSheet(
         val condSummary = selectedTriggers.map {
             when (it) {
                 TriggerDetector.COND_CROSS -> "Cross"
+                TriggerDetector.COND_PINBAR_BULL -> "BullPin"
+                TriggerDetector.COND_PINBAR_BEAR -> "BearPin"
+                TriggerDetector.COND_ENGULF_BULL -> "BullEngulf"
+                TriggerDetector.COND_ENGULF_BEAR -> "BearEngulf"
+                TriggerDetector.COND_RETEST_BOUNCE -> "Bounce"
+                TriggerDetector.COND_RETEST_REJECT -> "Reject"
                 TriggerDetector.COND_PINBAR -> "PinBar"
                 TriggerDetector.COND_ENGULFING -> "Engulf"
                 TriggerDetector.COND_RETEST -> "Retest"
@@ -830,10 +945,11 @@ private fun AlertSheet(
             }
         }.joinToString("/")
 
+        val targetLabel = if (isVwap) "VWAP" else "Level"
         val summaryText = if (totalCombos > 1) {
-            "⚡ $totalCombos-in-1 Multi-Alert: $condSummary on [$sortedTfs]"
+            "⚡ $totalCombos-in-1 at $targetLabel: $condSummary on [$sortedTfs]"
         } else {
-            "Single Alert: $condSummary" + if (candleConds.isNotEmpty()) " on [$sortedTfs]" else ""
+            "Single Alert at $targetLabel: $condSummary" + if (candleConds.isNotEmpty()) " on [$sortedTfs]" else ""
         }
         Box(
             modifier = Modifier
@@ -943,10 +1059,11 @@ private fun AlertSheet(
 
         Button(
             onClick = {
-                text.toDoubleOrNull()?.let {
+                val target = if (isVwap) -1.0 else text.toDoubleOrNull()
+                if (target != null) {
                     val trigStr = selectedTriggers.sorted().joinToString(",")
                     val tfStr = selectedTfs.mapNotNull { it.toIntOrNull() }.sorted().joinToString(",")
-                    onSave(it, customToneUri?.toString(), once, effectiveType, trigStr, tfStr)
+                    onSave(target, customToneUri?.toString(), once, effectiveType, trigStr, tfStr)
                 }
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),

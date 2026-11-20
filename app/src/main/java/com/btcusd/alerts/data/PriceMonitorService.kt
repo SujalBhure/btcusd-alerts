@@ -41,6 +41,7 @@ class PriceMonitorService : LifecycleService() {
     private val prev = mutableMapOf<String, Double>()
     private val lastTick = mutableMapOf<String, Long>()
     private val lastFiredCandleMs = mutableMapOf<Long, Long>()
+    private val vwapCache = mutableMapOf<String, Double>()
 
     override fun onCreate() {
         super.onCreate()
@@ -167,8 +168,11 @@ class PriceMonitorService : LifecycleService() {
 
                     for ((symbol, tf) in pairs) {
                         val market = marketOf(symbol)
-                        val candles = Feed.candles(market, interval = tf, limit = 5)
+                        val candles = Feed.candles(market, interval = tf, limit = 60)
                         if (candles.size < 2) continue
+
+                        val sessionVwap = Feed.calculateVwap(candles)
+                        if (sessionVwap > 0) vwapCache[symbol] = sessionVwap
 
                         // candles.last() is forming/open; candles[candles.size - 2] is completed/closed
                         val closed = candles[candles.size - 2]
@@ -188,16 +192,21 @@ class PriceMonitorService : LifecycleService() {
                             if (now - a.lastFiredMs < 60_000) continue
                             if (lastFiredCandleMs[a.id] == closed.startMs) continue
 
+                            val isVwap = a.targetPrice <= 0.0
+                            val effectiveTarget = if (isVwap) sessionVwap else a.targetPrice
+
                             for (cond in alertConds) {
-                                val match = TriggerDetector.evaluate(cond, closed, prev, a.targetPrice)
+                                val match = TriggerDetector.evaluate(cond, closed, prev, effectiveTarget)
                                 if (match != null) {
                                     lastFiredCandleMs[a.id] = closed.startMs
                                     db.dao().markFired(a.id, now)
+                                    val vwapTag = if (isVwap) " at VWAP" else ""
+                                    val descSuffix = if (isVwap) " (VWAP: $${fmtPrice(market, effectiveTarget)})" else ""
                                     fireAlarm(
                                         a = a,
                                         price = closed.close,
-                                        triggerTitle = "${match.title} ($tfLabel)",
-                                        triggerDesc = match.description
+                                        triggerTitle = "${match.title}$vwapTag ($tfLabel)",
+                                        triggerDesc = "${match.description}$descSuffix"
                                     )
                                     break
                                 }
@@ -220,16 +229,31 @@ class PriceMonitorService : LifecycleService() {
             if (TriggerDetector.COND_CROSS !in trigConds) continue
             if (now < a.snoozeUntilMs) continue
             if (now - a.lastFiredMs < 60_000) continue
-            val d1 = p - a.targetPrice
-            val d2 = price - a.targetPrice
+
+            val isVwap = a.targetPrice <= 0.0
+            var targetP = a.targetPrice
+            if (isVwap) {
+                targetP = vwapCache[marketId] ?: 0.0
+                if (targetP <= 0.0) {
+                    targetP = Feed.vwap(marketOf(marketId))
+                    vwapCache[marketId] = targetP
+                }
+            }
+            if (targetP <= 0.0) continue
+
+            val d1 = p - targetP
+            val d2 = price - targetP
             val crossed = d1 != 0.0 && (d1 < 0 != d2 < 0 || d2 == 0.0)
             if (crossed) {
                 db.dao().markFired(a.id, now)
+                val m = marketOf(a.symbol)
+                val title = if (isVwap) "Price Reached VWAP" else "Price Crossed Target"
+                val desc = if (isVwap) "Live price reached dynamic VWAP ($${fmtPrice(m, targetP)})" else "Live price crossed $${fmtPrice(m, targetP)}"
                 fireAlarm(
                     a = a,
                     price = price,
-                    triggerTitle = "Price Crossed Target",
-                    triggerDesc = "Live price crossed $${fmtPrice(marketOf(a.symbol), a.targetPrice)}"
+                    triggerTitle = title,
+                    triggerDesc = desc
                 )
             }
         }
