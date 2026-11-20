@@ -41,6 +41,12 @@ data class Alert(
     val updatedAtMs: Long = 0L
 )
 
+@Entity(tableName = "deleted_alerts")
+data class DeletedAlert(
+    @PrimaryKey val syncId: String,
+    val deletedAtMs: Long
+)
+
 @Dao
 interface AlertDao {
     @Query("SELECT * FROM alerts ORDER BY targetPrice ASC")
@@ -104,7 +110,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
-@Database(entities = [Alert::class], version = 5, exportSchema = false)
+@Database(entities = [Alert::class, DeletedAlert::class], version = 5, exportSchema = false)
 abstract class AlertDb : RoomDatabase() {
     abstract fun dao(): AlertDao
 

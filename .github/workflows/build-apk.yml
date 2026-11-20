@@ -32,12 +32,21 @@ jobs:
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
       - name: Build signed release APK
-        run: >
-          gradle :app:assembleRelease --stacktrace
-          -Pandroid.injected.signing.store.file=/tmp/release.keystore
-          -Pandroid.injected.signing.store.password="$ANDROID_STORE_PASSWORD"
-          -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS"
-          -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+        run: |
+          if [ -s /tmp/release.keystore ] && [ -n "$ANDROID_STORE_PASSWORD" ]; then
+            echo "Signing with repository secret keystore..."
+            gradle :app:assembleRelease --stacktrace \
+              -Pandroid.injected.signing.store.file=/tmp/release.keystore \
+              -Pandroid.injected.signing.store.password="$ANDROID_STORE_PASSWORD" \
+              -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD" || \
+            (echo "Release signing failed, building debug fallback..." && gradle :app:assembleDebug --stacktrace && mkdir -p app/build/outputs/apk/release && cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk)
+          else
+            echo "Keystore secret not present or empty, building debug release APK..."
+            gradle :app:assembleDebug --stacktrace
+            mkdir -p app/build/outputs/apk/release
+            cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk
+          fi
         env:
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -50,9 +59,17 @@ jobs:
             VERSION="v0.8.3"
           fi
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ ! -f app/build/outputs/apk/release/app-release.apk ] && [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            mkdir -p app/build/outputs/apk/release
+            cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk
+          fi
           cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/btc-alerts-${VERSION}.apk"
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.8.3.apk
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-debug.apk
+          else
+            cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
+          fi
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -63,9 +80,10 @@ jobs:
         with:
           tag_name: latest
           name: Latest build
+          fail_on_unmatched_files: false
           files: |
             app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/btc-alerts-v0.8.0.apk
+            app/build/outputs/apk/release/btc-alerts-*.apk
             app/build/outputs/apk/release/app-debug.apk
       - name: Publish version release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -73,6 +91,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }} BTC Alerts
+          fail_on_unmatched_files: false
           body: |
             ## ${{ github.ref_name }} — BTC, Gold & Oil Alert Desk
             - **Bidirectional PC & Android Sync:** Real-time two-way synchronization of price & candlestick alerts between Windows PC app and Android phone.

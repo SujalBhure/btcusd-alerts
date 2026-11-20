@@ -1531,7 +1531,7 @@ private fun SyncSheet(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         val clip = ClipData.newPlainText("SyncCode", code.trim())
                         cb.setPrimaryClip(clip)
                         feedback = "✓ Copied Sync Code!"
@@ -1544,7 +1544,7 @@ private fun SyncSheet(
                 }
                 Button(
                     onClick = {
-                        val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         val paste = cb.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
                         if (paste.isNotEmpty()) {
                             code = paste.trim()
