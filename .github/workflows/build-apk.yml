@@ -45,13 +45,13 @@ jobs:
       - name: Prepare APK files for distribution
         id: prep
         run: |
-          VERSION="${GITHUB_REF_NAME:-v0.8.0}"
+          VERSION="${GITHUB_REF_NAME:-v0.8.1}"
           if [ "$GITHUB_REF_TYPE" != "tag" ]; then
-            VERSION="v0.8.0"
+            VERSION="v0.8.1"
           fi
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
           cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/btc-alerts-${VERSION}.apk"
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.8.0.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.8.1.apk
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

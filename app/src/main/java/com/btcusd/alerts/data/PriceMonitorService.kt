@@ -151,14 +151,21 @@ class PriceMonitorService : LifecycleService() {
             while (isActive) {
                 delay(12_000)
                 runCatching {
-                    val activeCandleAlerts = db.dao().active().filter {
-                        it.triggerCondition != TriggerDetector.COND_CROSS
+                    val activeAlerts = db.dao().active()
+                    val pairs = mutableSetOf<Pair<String, String>>()
+                    for (a in activeAlerts) {
+                        val conds = (a.triggerCondition ?: "").split(",").map { it.trim() }
+                            .filter { it != TriggerDetector.COND_CROSS && it.isNotEmpty() }
+                        if (conds.isEmpty()) continue
+                        val tfs = (a.timeframe ?: "15").split(",").map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                        for (tf in tfs) {
+                            pairs.add(a.symbol to tf)
+                        }
                     }
-                    if (activeCandleAlerts.isEmpty()) return@runCatching
+                    if (pairs.isEmpty()) return@runCatching
 
-                    val grouped = activeCandleAlerts.groupBy { it.symbol to it.timeframe }
-                    for ((key, alerts) in grouped) {
-                        val (symbol, tf) = key
+                    for ((symbol, tf) in pairs) {
                         val market = marketOf(symbol)
                         val candles = Feed.candles(market, interval = tf, limit = 5)
                         if (candles.size < 2) continue
@@ -167,22 +174,33 @@ class PriceMonitorService : LifecycleService() {
                         val closed = candles[candles.size - 2]
                         val prev = candles.getOrNull(candles.size - 3)
                         val now = System.currentTimeMillis()
+                        val tfLabel = if (tf in listOf("5", "15")) "${tf}m" else "${tf.toIntOrNull()?.div(60) ?: tf}h"
 
-                        for (a in alerts) {
+                        for (a in activeAlerts.filter { it.symbol == symbol }) {
+                            val alertTfs = (a.timeframe ?: "15").split(",").map { it.trim() }
+                            if (tf !in alertTfs) continue
+
+                            val alertConds = (a.triggerCondition ?: "").split(",").map { it.trim() }
+                                .filter { it != TriggerDetector.COND_CROSS && it.isNotEmpty() }
+                            if (alertConds.isEmpty()) continue
+
                             if (now < a.snoozeUntilMs) continue
                             if (now - a.lastFiredMs < 60_000) continue
                             if (lastFiredCandleMs[a.id] == closed.startMs) continue
 
-                            val match = TriggerDetector.evaluate(a.triggerCondition, closed, prev, a.targetPrice)
-                            if (match != null) {
-                                lastFiredCandleMs[a.id] = closed.startMs
-                                db.dao().markFired(a.id, now)
-                                fireAlarm(
-                                    a = a,
-                                    price = closed.close,
-                                    triggerTitle = "${match.title} (${a.timeframe}m)",
-                                    triggerDesc = match.description
-                                )
+                            for (cond in alertConds) {
+                                val match = TriggerDetector.evaluate(cond, closed, prev, a.targetPrice)
+                                if (match != null) {
+                                    lastFiredCandleMs[a.id] = closed.startMs
+                                    db.dao().markFired(a.id, now)
+                                    fireAlarm(
+                                        a = a,
+                                        price = closed.close,
+                                        triggerTitle = "${match.title} ($tfLabel)",
+                                        triggerDesc = match.description
+                                    )
+                                    break
+                                }
                             }
                         }
                     }
@@ -198,8 +216,8 @@ class PriceMonitorService : LifecycleService() {
         if (p == null || p <= 0) return
         val now = System.currentTimeMillis()
         for (a in db.dao().active().filter { it.symbol == marketId }) {
-            // Candle-based triggers (RETEST, PINBAR, ENGULFING, ANY_TRIGGER) are checked in candleWatcher
-            if (a.triggerCondition != TriggerDetector.COND_CROSS) continue
+            val trigConds = (a.triggerCondition ?: TriggerDetector.COND_CROSS).split(",").map { it.trim() }
+            if (TriggerDetector.COND_CROSS !in trigConds) continue
             if (now < a.snoozeUntilMs) continue
             if (now - a.lastFiredMs < 60_000) continue
             val d1 = p - a.targetPrice
@@ -207,7 +225,12 @@ class PriceMonitorService : LifecycleService() {
             val crossed = d1 != 0.0 && (d1 < 0 != d2 < 0 || d2 == 0.0)
             if (crossed) {
                 db.dao().markFired(a.id, now)
-                fireAlarm(a, price)
+                fireAlarm(
+                    a = a,
+                    price = price,
+                    triggerTitle = "Price Crossed Target",
+                    triggerDesc = "Live price crossed $${fmtPrice(marketOf(a.symbol), a.targetPrice)}"
+                )
             }
         }
     }

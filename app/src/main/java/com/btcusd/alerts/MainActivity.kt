@@ -510,27 +510,37 @@ private fun AlertRow(
                     Text(a.alertType, color = badgeFg, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
-                if (a.triggerCondition != TriggerDetector.COND_CROSS) {
-                    val triggerTag = when (a.triggerCondition) {
-                        TriggerDetector.COND_RETEST -> "RETEST ${a.timeframe}m"
-                        TriggerDetector.COND_PINBAR -> "PIN BAR ${a.timeframe}m"
-                        TriggerDetector.COND_ENGULFING -> "ENGULF ${a.timeframe}m"
-                        TriggerDetector.COND_ANY_TRIGGER -> "TRIGGER ${a.timeframe}m"
-                        else -> a.triggerCondition
+                val trigConds = a.triggerCondition.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val tfs = a.timeframe.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val hasCandle = trigConds.any { it != TriggerDetector.COND_CROSS }
+                val isMulti = trigConds.size > 1 || tfs.size > 1
+
+                val tfDisplay = tfs.mapNotNull { it.toIntOrNull() }.sorted().map { if (it in listOf(5, 15)) "${it}m" else "${it / 60}h" }.joinToString(",")
+                val condShorts = trigConds.map {
+                    when (it) {
+                        TriggerDetector.COND_CROSS -> "CROSS"
+                        TriggerDetector.COND_PINBAR -> "PINBAR"
+                        TriggerDetector.COND_ENGULFING -> "ENGULF"
+                        TriggerDetector.COND_RETEST -> "RETEST"
+                        TriggerDetector.COND_ANY_TRIGGER -> "PATTERN"
+                        else -> it
                     }
+                }.joinToString("/")
+
+                if (hasCandle || isMulti) {
+                    val badgeText = if (hasCandle) "⚡ $condShorts ($tfDisplay)" else "⚡ $condShorts"
                     Box(
                         modifier = Modifier
                             .background(Color(0x262962FF), RoundedCornerShape(6.dp))
                             .border(1.dp, Color(0xFF2962FF), RoundedCornerShape(6.dp))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Text(triggerTag, color = Color(0xFF82B1FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(badgeText, color = Color(0xFF82B1FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 Text(
-                    if (a.triggerCondition == TriggerDetector.COND_CROSS) "${m.id} cross $${fmtPrice(m, a.targetPrice)}"
-                    else "${m.id} @ $${fmtPrice(m, a.targetPrice)}",
+                    "${m.id} @ $${fmtPrice(m, a.targetPrice)}",
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium
                 )
             }
@@ -542,13 +552,9 @@ private fun AlertRow(
                 val typeUri = SoundSettings.getSoundUri(ctx, typeKey)
                 if (typeUri != null) SoundSettings.getSoundLabel(ctx, typeKey) else "universal"
             }
-            val triggerDesc = when (a.triggerCondition) {
-                TriggerDetector.COND_RETEST -> "retest candle (${a.timeframe}m)"
-                TriggerDetector.COND_PINBAR -> "pin bar confirmation (${a.timeframe}m)"
-                TriggerDetector.COND_ENGULFING -> "engulfing confirmation (${a.timeframe}m)"
-                TriggerDetector.COND_ANY_TRIGGER -> "any trigger confirmation (${a.timeframe}m)"
-                else -> null
-            }
+            val triggerDesc = if (hasCandle || isMulti) {
+                "$condShorts ($tfDisplay)"
+            } else null
             Text(
                 if (!a.active) "off • tap to edit"
                 else "${if (a.oneShot) "once" else "every time"}${if (triggerDesc != null) " • $triggerDesc" else ""} • ♪ $soundLabel • tap to edit",
@@ -590,12 +596,17 @@ private fun AlertSheet(
     }
     var once by remember { mutableStateOf(initialAlert?.oneShot ?: true) }
 
-    var selectedTrigger by remember {
-        mutableStateOf(initialAlert?.triggerCondition ?: TriggerDetector.COND_CROSS)
+    val initialTriggers = remember(initialAlert) {
+        initialAlert?.triggerCondition?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+            ?: setOf(TriggerDetector.COND_CROSS)
     }
-    var selectedTf by remember {
-        mutableStateOf(initialAlert?.timeframe ?: "15")
+    var selectedTriggers by remember { mutableStateOf(initialTriggers) }
+
+    val initialTfs = remember(initialAlert) {
+        initialAlert?.timeframe?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+            ?: setOf("15")
     }
+    var selectedTfs by remember { mutableStateOf(initialTfs) }
 
     var selectedType by remember {
         mutableStateOf(
@@ -680,19 +691,26 @@ private fun AlertSheet(
 
         Spacer(Modifier.height(14.dp))
 
-        // Trigger Condition Selector
-        Text("Trigger Condition", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        // Trigger Condition Selector (Multi-Select toggle)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Trigger Conditions", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text("Tap to combine multiple", color = Color(0xFF82B1FF), fontSize = 12.sp)
+        }
         Spacer(Modifier.height(6.dp))
         val triggerOptions = listOf(
             Triple(TriggerDetector.COND_CROSS, "Cross", "Instant"),
             Triple(TriggerDetector.COND_RETEST, "Retest", "Level bounce"),
             Triple(TriggerDetector.COND_PINBAR, "Pin Bar", "Hammer / Star"),
             Triple(TriggerDetector.COND_ENGULFING, "Engulfing", "Reversal"),
-            Triple(TriggerDetector.COND_ANY_TRIGGER, "Any Trigger", "All confirmations")
+            Triple(TriggerDetector.COND_ANY_TRIGGER, "Any Pattern", "All confirmations")
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             triggerOptions.take(3).forEach { (cond, label, _) ->
-                val isSelected = selectedTrigger == cond
+                val isSelected = cond in selectedTriggers
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -700,7 +718,13 @@ private fun AlertSheet(
                             if (isSelected) Color(0xFF2962FF) else Color(0xFF2A3138),
                             RoundedCornerShape(16.dp)
                         )
-                        .clickable { selectedTrigger = cond }
+                        .clickable {
+                            selectedTriggers = if (isSelected) {
+                                if (selectedTriggers.size > 1) selectedTriggers - cond else selectedTriggers
+                            } else {
+                                selectedTriggers + cond
+                            }
+                        }
                         .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -716,7 +740,7 @@ private fun AlertSheet(
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             triggerOptions.drop(3).forEach { (cond, label, _) ->
-                val isSelected = selectedTrigger == cond
+                val isSelected = cond in selectedTriggers
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -724,7 +748,13 @@ private fun AlertSheet(
                             if (isSelected) Color(0xFF2962FF) else Color(0xFF2A3138),
                             RoundedCornerShape(16.dp)
                         )
-                        .clickable { selectedTrigger = cond }
+                        .clickable {
+                            selectedTriggers = if (isSelected) {
+                                if (selectedTriggers.size > 1) selectedTriggers - cond else selectedTriggers
+                            } else {
+                                selectedTriggers + cond
+                            }
+                        }
                         .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -738,22 +768,23 @@ private fun AlertSheet(
             }
         }
 
-        // Timeframe selector if condition requires candles
-        if (selectedTrigger != TriggerDetector.COND_CROSS) {
+        // Timeframe selector (Multi-Select toggle for candle confirmations)
+        val hasCandleTriggers = selectedTriggers.any { it != TriggerDetector.COND_CROSS }
+        if (hasCandleTriggers) {
             Spacer(Modifier.height(12.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Confirmation Timeframe", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                Text("Evaluated on close", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+                Text("Candle Timeframes", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Tap multiple timeframes", color = Color(0xFFF7A600), fontSize = 12.sp)
             }
             Spacer(Modifier.height(6.dp))
             val tfOptions = listOf("5" to "5m", "15" to "15m", "60" to "1h", "240" to "4h")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 tfOptions.forEach { (tfVal, tfLabel) ->
-                    val isSelected = selectedTf == tfVal
+                    val isSelected = tfVal in selectedTfs
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -761,7 +792,13 @@ private fun AlertSheet(
                                 if (isSelected) Color(0xFFF7A600) else Color(0xFF2A3138),
                                 RoundedCornerShape(16.dp)
                             )
-                            .clickable { selectedTf = tfVal }
+                            .clickable {
+                                selectedTfs = if (isSelected) {
+                                    if (selectedTfs.size > 1) selectedTfs - tfVal else selectedTfs
+                                } else {
+                                    selectedTfs + tfVal
+                                }
+                            }
                             .padding(vertical = 7.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -774,23 +811,43 @@ private fun AlertSheet(
                     }
                 }
             }
+        }
 
-            Spacer(Modifier.height(8.dp))
-            val triggerHelp = when (selectedTrigger) {
-                TriggerDetector.COND_RETEST -> "🔄 Alerts when a ${selectedTf}m candle tests and holds/bounces at this level."
-                TriggerDetector.COND_PINBAR -> "🎯 Alerts when a Hammer or Shooting Star prints at this level with a long rejection wick."
-                TriggerDetector.COND_ENGULFING -> "⚡ Alerts when a Bullish or Bearish Engulfing reversal candle forms at this level."
-                TriggerDetector.COND_ANY_TRIGGER -> "🔥 Alerts when ANY confirmation (Pin Bar, Engulfing, or Retest) forms at this level."
-                else -> ""
+        // Dynamic Multi-Trigger Status Badge
+        Spacer(Modifier.height(10.dp))
+        val candleConds = selectedTriggers.filter { it != TriggerDetector.COND_CROSS }
+        val hasCross = TriggerDetector.COND_CROSS in selectedTriggers
+        val totalCombos = (candleConds.size * (if (hasCandleTriggers) selectedTfs.size else 1)) + (if (hasCross) 1 else 0)
+        val sortedTfs = selectedTfs.mapNotNull { it.toIntOrNull() }.sorted().map { if (it in listOf(5, 15)) "${it}m" else "${it / 60}h" }.joinToString(",")
+        val condSummary = selectedTriggers.map {
+            when (it) {
+                TriggerDetector.COND_CROSS -> "Cross"
+                TriggerDetector.COND_PINBAR -> "PinBar"
+                TriggerDetector.COND_ENGULFING -> "Engulf"
+                TriggerDetector.COND_RETEST -> "Retest"
+                TriggerDetector.COND_ANY_TRIGGER -> "AnyPattern"
+                else -> it
             }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1E2329), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
-                Text(triggerHelp, color = Color(0xFFB0B0B0), fontSize = 12.sp)
-            }
+        }.joinToString("/")
+
+        val summaryText = if (totalCombos > 1) {
+            "⚡ $totalCombos-in-1 Multi-Alert: $condSummary on [$sortedTfs]"
+        } else {
+            "Single Alert: $condSummary" + if (candleConds.isNotEmpty()) " on [$sortedTfs]" else ""
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(if (totalCombos > 1) Color(0xFF182333) else Color(0xFF1E2329), RoundedCornerShape(8.dp))
+                .border(1.dp, if (totalCombos > 1) Color(0xFF2962FF) else Color.Transparent, RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            Text(
+                summaryText,
+                color = if (totalCombos > 1) Color(0xFF82B1FF) else Color(0xFFB0B0B0),
+                fontSize = 12.sp,
+                fontWeight = if (totalCombos > 1) FontWeight.Bold else FontWeight.Normal
+            )
         }
 
         Spacer(Modifier.height(14.dp))
@@ -887,7 +944,9 @@ private fun AlertSheet(
         Button(
             onClick = {
                 text.toDoubleOrNull()?.let {
-                    onSave(it, customToneUri?.toString(), once, effectiveType, selectedTrigger, selectedTf)
+                    val trigStr = selectedTriggers.sorted().joinToString(",")
+                    val tfStr = selectedTfs.mapNotNull { it.toIntOrNull() }.sorted().joinToString(",")
+                    onSave(it, customToneUri?.toString(), once, effectiveType, trigStr, tfStr)
                 }
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
