@@ -248,11 +248,15 @@ class AlarmActivity : ComponentActivity() {
                                 RingtonePlayer.stop(this@AlarmActivity)
                                 CoroutineScope(Dispatchers.IO).launch {
                                     runCatching {
-                                        val db = Room.databaseBuilder(
-                                            this@AlarmActivity, AlertDb::class.java, "alerts.db"
-                                        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
-                                        if (!isTest && oneShot && alertId != 0L) db.dao().deleteById(alertId)
-                                        db.close()
+                                        val db = AlertDb.get(this@AlarmActivity)
+                                        if (!isTest && oneShot && alertId != 0L) {
+                                            val a = db.dao().getById(alertId)
+                                            if (a != null && a.syncId.isNotEmpty()) {
+                                                db.dao().recordDeleted(a.syncId, System.currentTimeMillis())
+                                            }
+                                            db.dao().deleteById(alertId)
+                                            com.btcusd.alerts.data.SyncManager.pushState(this@AlarmActivity, db)
+                                        }
                                     }
                                 }
                                 finish()
@@ -272,13 +276,10 @@ class AlarmActivity : ComponentActivity() {
                                 RingtonePlayer.stop(this@AlarmActivity)
                                 CoroutineScope(Dispatchers.IO).launch {
                                     runCatching {
-                                        val db = Room.databaseBuilder(
-                                            this@AlarmActivity, AlertDb::class.java, "alerts.db"
-                                        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+                                        val db = AlertDb.get(this@AlarmActivity)
                                         if (!isTest && alertId != 0L) {
                                              db.dao().snooze(alertId, System.currentTimeMillis() + snoozeMins * 60_000L)
                                         }
-                                        db.close()
                                     }
                                 }
                                 finish()

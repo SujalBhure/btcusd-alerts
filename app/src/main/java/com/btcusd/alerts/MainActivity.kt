@@ -1,6 +1,9 @@
 package com.btcusd.alerts
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -76,6 +80,7 @@ import com.btcusd.alerts.data.MARKETS
 import com.btcusd.alerts.data.MIGRATION_1_2
 import com.btcusd.alerts.data.MIGRATION_2_3
 import com.btcusd.alerts.data.MIGRATION_3_4
+import com.btcusd.alerts.data.SyncManager
 import com.btcusd.alerts.data.TriggerDetector
 import com.btcusd.alerts.data.Market
 import com.btcusd.alerts.data.PriceMonitorService
@@ -83,6 +88,7 @@ import com.btcusd.alerts.data.UpdateChecker
 import com.btcusd.alerts.data.fmtPrice
 import com.btcusd.alerts.data.marketOf
 import com.btcusd.alerts.ui.AppTheme
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,10 +106,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-            .fallbackToDestructiveMigration()
-            .build()
+        db = AlertDb.get(this)
 
         PriceMonitorService.ensureAlertChannel(this)
         if (Build.VERSION.SDK_INT >= 33) {
@@ -128,6 +131,7 @@ private fun Home(db: AlertDb, resumeTick: Int) {
     var showSound by remember { mutableStateOf(false) }
     var soundRefreshKey by remember { mutableIntStateOf(0) }
     var showTestRing by remember { mutableStateOf(false) }
+    var showSyncSheet by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateChecker.Update?>(null) }
     var downloading by remember { mutableStateOf(false) }
     var showAuto by remember { mutableStateOf(false) }
@@ -184,6 +188,11 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                         Icon(Icons.Default.Settings, contentDescription = "Permissions", tint = Color.White)
                     }
                     Button(
+                        onClick = { showSyncSheet = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
+                        shape = RoundedCornerShape(20.dp)
+                    ) { Text("🔄 Sync", fontSize = 13.sp) }
+                    Button(
                         onClick = {
                             RingtonePlayer.stop(ctx)
                             showSound = true
@@ -214,8 +223,24 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                 items(alerts, key = { "a" + it.id }) { a ->
                     AlertRow(
                         a = a,
-                        onToggle = { scope.launch(Dispatchers.IO) { db.dao().setActive(a.id, !a.active) } },
-                        onDelete = { scope.launch(Dispatchers.IO) { db.dao().delete(a) } },
+                        onToggle = {
+                            scope.launch(Dispatchers.IO) {
+                                val sId = if (a.syncId.isNotEmpty()) a.syncId else UUID.randomUUID().toString().replace("-", "")
+                                val now = System.currentTimeMillis()
+                                db.dao().update(a.copy(active = !a.active, syncId = sId, updatedAtMs = now))
+                                SyncManager.pushState(ctx, db)
+                            }
+                        },
+                        onDelete = {
+                            scope.launch(Dispatchers.IO) {
+                                val now = System.currentTimeMillis()
+                                if (a.syncId.isNotEmpty()) {
+                                    db.dao().recordDeleted(a.syncId, now)
+                                }
+                                db.dao().delete(a)
+                                SyncManager.pushState(ctx, db)
+                            }
+                        },
                         onEdit = { editingAlert = a }
                     )
                 }
@@ -249,6 +274,8 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     initialAlert = null,
                     onSave = { target, tone, onceMode, alertType, triggerCondition, timeframe ->
                         scope.launch(Dispatchers.IO) {
+                            val sId = UUID.randomUUID().toString().replace("-", "")
+                            val now = System.currentTimeMillis()
                             db.dao().insert(
                                 Alert(
                                     symbol = sm.id,
@@ -258,9 +285,12 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                                     ringtoneUri = tone,
                                     alertType = alertType,
                                     triggerCondition = triggerCondition,
-                                    timeframe = timeframe
+                                    timeframe = timeframe,
+                                    syncId = sId,
+                                    updatedAtMs = now
                                 )
                             )
+                            SyncManager.pushState(ctx, db)
                             withContext(Dispatchers.Main) { showSheet = false }
                         }
                     }
@@ -278,6 +308,8 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                     initialAlert = ea,
                     onSave = { target, tone, onceMode, alertType, triggerCondition, timeframe ->
                         scope.launch(Dispatchers.IO) {
+                            val sId = if (ea.syncId.isNotEmpty()) ea.syncId else UUID.randomUUID().toString().replace("-", "")
+                            val now = System.currentTimeMillis()
                             db.dao().update(
                                 ea.copy(
                                     targetPrice = target,
@@ -287,15 +319,23 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                                     alertType = alertType,
                                     triggerCondition = triggerCondition,
                                     timeframe = timeframe,
+                                    syncId = sId,
+                                    updatedAtMs = now,
                                     active = true
                                 )
                             )
+                            SyncManager.pushState(ctx, db)
                             withContext(Dispatchers.Main) { editingAlert = null }
                         }
                     },
                     onDelete = {
                         scope.launch(Dispatchers.IO) {
+                            val now = System.currentTimeMillis()
+                            if (ea.syncId.isNotEmpty()) {
+                                db.dao().recordDeleted(ea.syncId, now)
+                            }
                             db.dao().delete(ea)
+                            SyncManager.pushState(ctx, db)
                             withContext(Dispatchers.Main) { editingAlert = null }
                         }
                     }
@@ -348,6 +388,16 @@ private fun Home(db: AlertDb, resumeTick: Int) {
                         })
                         showTestRing = false
                     }
+                )
+            }
+        }
+        if (showSyncSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showSyncSheet = false },
+                containerColor = Color(0xFF14181D)
+            ) {
+                SyncSheet(
+                    onDismiss = { showSyncSheet = false }
                 )
             }
         }
@@ -1401,6 +1451,207 @@ private fun PermRow(title: String, desc: String, needed: Boolean, onGrant: () ->
                 shape = RoundedCornerShape(20.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF7A600), contentColor = Color.Black)
             ) { Text("Grant", fontSize = 13.sp) }
+        }
+    }
+}
+
+@Composable
+private fun SyncSheet(
+    onDismiss: () -> Unit
+) {
+    val ctx = LocalContext.current
+    var code by remember { mutableStateOf(SyncManager.getSyncCode(ctx)) }
+    var localUrl by remember { mutableStateOf(SyncManager.getLocalUrl(ctx)) }
+    var statusText by remember { mutableStateOf(SyncManager.getLastStatus(ctx)) }
+    var isSyncing by remember { mutableStateOf(false) }
+    var feedback by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .navigationBarsPadding()
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("📱 ⮂ 💻  Device Sync", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("Close", fontSize = 12.sp) }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Sync alerts bidirectionally between your phone and PC.",
+            color = Color(0xFF9E9E9E), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(14.dp))
+
+        // Card 1: Cloud Sync (Works Anywhere)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1A2027), RoundedCornerShape(12.dp))
+                .padding(14.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("☁️ Cloud Sync (Anywhere)", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Box(
+                    Modifier
+                        .background(Color(0xFF182333), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("4G / 5G / Wi-Fi", color = Color(0xFF82B1FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Enter the same Sync Code as on your PC app:",
+                color = Color(0xFFB0B0B0), fontSize = 12.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it },
+                label = { Text("Sync Code") },
+                placeholder = { Text("e.g. btcalert-xxxxxx") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("SyncCode", code.trim())
+                        cb.setPrimaryClip(clip)
+                        feedback = "✓ Copied Sync Code!"
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📋 Copy", fontSize = 12.sp)
+                }
+                Button(
+                    onClick = {
+                        val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val paste = cb.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                        if (paste.isNotEmpty()) {
+                            code = paste.trim()
+                            feedback = "✓ Pasted Sync Code!"
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📋 Paste", fontSize = 12.sp)
+                }
+            }
+            if (feedback.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(feedback, color = Color(0xFF0ECB81), fontSize = 11.sp)
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Card 2: Local Wi-Fi (Direct LAN)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1A2027), RoundedCornerShape(12.dp))
+                .padding(14.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("📡 Local Wi-Fi (Direct LAN)", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Box(
+                    Modifier
+                        .background(Color(0xFF1F2833), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("Optional", color = Color(0xFF0ECB81), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "PC Local URL (e.g. http://192.168.0.101:8388):",
+                color = Color(0xFFB0B0B0), fontSize = 12.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = localUrl,
+                onValueChange = { localUrl = it },
+                label = { Text("PC Local URL (optional)") },
+                placeholder = { Text("http://192.168.x.x:8388") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "● Status: $statusText",
+            color = Color(0xFF9E9E9E), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Actions
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = {
+                    SyncManager.setSyncCode(ctx, code)
+                    SyncManager.setLocalUrl(ctx, localUrl)
+                    isSyncing = true
+                    statusText = "Syncing..."
+                    scope.launch(Dispatchers.IO) {
+                        val db = AlertDb.get(ctx)
+                        SyncManager.syncNow(ctx, db)
+                        withContext(Dispatchers.Main) {
+                            statusText = SyncManager.getLastStatus(ctx)
+                            isSyncing = false
+                            feedback = "✓ Synced with PC!"
+                        }
+                    }
+                },
+                enabled = !isSyncing,
+                modifier = Modifier.weight(1f).height(44.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0ECB81), contentColor = Color.Black)
+            ) {
+                Text(if (isSyncing) "Syncing…" else "🔄 Sync Now", fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = {
+                    SyncManager.setSyncCode(ctx, code)
+                    SyncManager.setLocalUrl(ctx, localUrl)
+                    scope.launch(Dispatchers.IO) {
+                        val db = AlertDb.get(ctx)
+                        SyncManager.syncNow(ctx, db)
+                    }
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f).height(44.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3138), contentColor = Color.White)
+            ) {
+                Text("Save & Close")
+            }
         }
     }
 }

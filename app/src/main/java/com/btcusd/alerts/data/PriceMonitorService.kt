@@ -46,8 +46,7 @@ class PriceMonitorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         ensureAlertChannel(this)
-        db = Room.databaseBuilder(this, AlertDb::class.java, "alerts.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+        db = AlertDb.get(this)
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTCAlerts:monitor")
             .apply { runCatching { acquire() } }
@@ -56,6 +55,7 @@ class PriceMonitorService : LifecycleService() {
         startWatchdog()
         startPollLoop()
         startCandleWatcher()
+        startSyncLoop()
     }
 
     private fun persistentNotification(): Notification {
@@ -139,6 +139,20 @@ class PriceMonitorService : LifecycleService() {
         for (s in bybitSyms()) BybitApi.tickerFor(s)?.let { onTick(s, it.lastPrice) }
         for (m in restMarkets()) {
             Feed.quote(m)?.let { onTick(m.id, it.last) }
+        }
+    }
+
+    private var syncJob: Job? = null
+
+    private fun startSyncLoop() {
+        syncJob?.cancel()
+        syncJob = lifecycleScope.launch {
+            delay(3000)
+            SyncManager.syncNow(this@PriceMonitorService, db)
+            while (isActive) {
+                delay(20_000)
+                SyncManager.syncNow(this@PriceMonitorService, db)
+            }
         }
     }
 

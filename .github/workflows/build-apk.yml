@@ -45,13 +45,13 @@ jobs:
       - name: Prepare APK files for distribution
         id: prep
         run: |
-          VERSION="${GITHUB_REF_NAME:-v0.8.2}"
+          VERSION="${GITHUB_REF_NAME:-v0.8.3}"
           if [ "$GITHUB_REF_TYPE" != "tag" ]; then
-            VERSION="v0.8.2"
+            VERSION="v0.8.3"
           fi
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
           cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/btc-alerts-${VERSION}.apk"
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.8.2.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/btc-alerts-v0.8.3.apk
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/app-debug.apk
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -75,12 +75,13 @@ jobs:
           name: ${{ github.ref_name }} BTC Alerts
           body: |
             ## ${{ github.ref_name }} — BTC, Gold & Oil Alert Desk
+            - **Bidirectional PC & Android Sync:** Real-time two-way synchronization of price & candlestick alerts between Windows PC app and Android phone.
+            - **Cloud & Local Wi-Fi Sync:** Connects seamlessly over Cloud Relay (4G/5G/Wi-Fi with zero setup) or direct local network.
             - **3 Core Markets Only:** BTCUSD (Bybit Perp), XAUUSD (Gold Spot), and USOIL (WTI Crude Oil).
-            - **Sound Settings Preview & Stop:** Interactive Play/Stop toggle per ringtone row and master Stop button to halt audio immediately.
+            - **Multi-Condition & VWAP Alerts:** Set multiple pattern/timeframe triggers and dynamic VWAP in a single alert.
+            - **Sound Settings Preview & Stop:** Interactive Play/Stop toggle per ringtone row and master Stop button.
             - **Emergency Dismiss Fix:** Dismissing the alarm window immediately stops all ringing, clears vibration, and cancels background notifications.
             - **Multi-Market Test Ring:** Test ring modal allows simulating live alarms for BTC, Gold, and Oil with verified TradingView chart deep-links.
-            - **TradingView Chart Deep-Links:** Exact exchange pairs: `BYBIT:BTCUSD`, `OANDA:XAUUSD`, and `TVC:USOIL`.
-            - **Candlestick Confirmations & Retests:** Level bounce, Pin Bar (hammer/shooting star), and Engulfing pattern triggers.
           files: |
             app/build/outputs/apk/release/btc-alerts-*.apk
             app/build/outputs/apk/release/app-release.apk
